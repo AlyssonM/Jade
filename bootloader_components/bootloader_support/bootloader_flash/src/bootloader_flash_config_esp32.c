@@ -35,6 +35,15 @@
 #define FLASH_SPIWP_IO  MSPI_IOMUX_PIN_NUM_WP
 #define FLASH_SPIHD_IO  MSPI_IOMUX_PIN_NUM_HD
 
+// Compatibility shim for ESP-IDF 5.x where gpio_hal_iomux_func_sel
+// is no longer provided but the bootloader code still expects it.
+// Implement it in terms of PIN_FUNC_SELECT from io_mux_reg.h.
+static inline void boot_gpio_hal_iomux_func_sel(uint32_t reg, uint32_t func)
+{
+    PIN_FUNC_SELECT(reg, func);
+}
+#define gpio_hal_iomux_func_sel boot_gpio_hal_iomux_func_sel
+
 void bootloader_flash_update_id(void)
 {
     g_rom_flashchip.device_id = bootloader_read_flash_id();

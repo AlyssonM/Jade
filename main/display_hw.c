@@ -9,9 +9,13 @@
 #include "utils/util.h"
 #include <driver/gpio.h>
 
+#ifdef CONFIG_RPI_LCD_DISPLAY
+#include "rpi_lcd.h"
+#else
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
+#endif
 
 #include "freertos/semphr.h"
 #include <freertos/FreeRTOS.h>
@@ -31,7 +35,10 @@
  * */
 
 static TaskHandle_t* gui_h = NULL;
+
+#ifndef CONFIG_RPI_LCD_DISPLAY
 static SemaphoreHandle_t init_done = NULL;
+#endif
 
 #ifdef CONFIG_BOARD_TYPE_TTGO_TDISPLAYS3
 
@@ -65,7 +72,8 @@ static color_t* disp_buf = NULL;
 
 #define TRANSFER_QUEUE_DEPTH 8
 
-#if defined(CONFIG_DISPLAY_FULL_FRAME_BUFFER) && !defined(CONFIG_DISPLAY_FULL_FRAME_BUFFER_DOUBLE)
+#if defined(CONFIG_DISPLAY_FULL_FRAME_BUFFER) && !defined(CONFIG_DISPLAY_FULL_FRAME_BUFFER_DOUBLE)                    \
+    && !defined(CONFIG_RPI_LCD_DISPLAY)
 static bool color_trans_done(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t* edata, void* user_ctx)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
@@ -77,6 +85,7 @@ static bool color_trans_done(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_i
 }
 #endif
 
+#ifndef CONFIG_RPI_LCD_DISPLAY
 static esp_lcd_panel_handle_t ph = NULL;
 
 static void esp_lcd_init(void* _ignored)
@@ -219,22 +228,49 @@ static void esp_lcd_init(void* _ignored)
         vTaskDelay(portMAX_DELAY);
     }
 }
+#endif // !CONFIG_RPI_LCD_DISPLAY
 
 bool display_hw_flip_orientation(const bool flipped_orientation)
 {
+
+#ifdef CONFIG_RPI_LCD_DISPLAY
+    // Espelhamento não é aplicado explicitamente via rpi_lcd.
+    // Mantemos a API e retornamos o valor solicitado.
+    (void)flipped_orientation;
+    return flipped_orientation;
+#else
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(ph, flipped_orientation ^ X_FLIPPED, flipped_orientation ^ Y_FLIPPED));
     return flipped_orientation;
+#endif
 }
 
 void display_hw_init(TaskHandle_t* gui_handle)
 {
     JADE_ASSERT(gui_handle);
     JADE_ASSERT(!*gui_handle);
+    gui_h = gui_handle;
+
+#ifdef CONFIG_RPI_LCD_DISPLAY
+#ifdef CONFIG_DISPLAY_FULL_FRAME_BUFFER_DOUBLE
+    _disp_buf = JADE_MALLOC_PREFER_SPIRAM(2 * sizeof(color_t*));
+    _disp_buf[0]
+        = JADE_MALLOC_PREFER_SPIRAM_ALIGNED(CONFIG_DISPLAY_WIDTH * CONFIG_DISPLAY_HEIGHT * sizeof(color_t), 16);
+    _disp_buf[1]
+        = JADE_MALLOC_PREFER_SPIRAM_ALIGNED(CONFIG_DISPLAY_WIDTH * CONFIG_DISPLAY_HEIGHT * sizeof(color_t), 16);
+    disp_buf = _disp_buf[0];
+#elif defined(CONFIG_DISPLAY_FULL_FRAME_BUFFER)
+    disp_buf = JADE_MALLOC_PREFER_SPIRAM_ALIGNED(CONFIG_DISPLAY_WIDTH * CONFIG_DISPLAY_HEIGHT * sizeof(color_t), 16);
+#endif
+
+    // Inicialização síncrona do driver rpi_lcd
+    tft_init_pins();
+    tft_init_spi();
+    tft_reset();
+    tft_init_display();
+#else
     JADE_ASSERT(!init_done);
     init_done = xSemaphoreCreateBinary();
     JADE_ASSERT(init_done);
-
-    gui_h = gui_handle;
 
 #ifdef CONFIG_DISPLAY_FULL_FRAME_BUFFER_DOUBLE
     _disp_buf = JADE_MALLOC_PREFER_SPIRAM(2 * sizeof(color_t*));
@@ -259,12 +295,45 @@ void display_hw_init(TaskHandle_t* gui_handle)
     xSemaphoreTake(init_done, portMAX_DELAY);
     vTaskDelete(lcdInitTaskHandle);
     vSemaphoreDelete(init_done);
+#endif
 }
 
 inline void display_hw_draw_bitmap(int x, int y, int w, int h, const uint16_t* color_data)
 {
-    JADE_ASSERT(ph);
     JADE_ASSERT(color_data);
+    const int calculatedx = x - CONFIG_DISPLAY_OFFSET_X;
+    const int calculatedy = y - CONFIG_DISPLAY_OFFSET_Y;
+
+#ifdef CONFIG_RPI_LCD_DISPLAY
+
+#ifdef CONFIG_DISPLAY_FULL_FRAME_BUFFER
+    if (!calculatedx && w == CONFIG_DISPLAY_WIDTH) {
+        /* if we can copy the whole frame buffer in one go */
+        uint16_t* screen_ptr = &disp_buf[calculatedy * CONFIG_DISPLAY_WIDTH];
+        jmemcpy(screen_ptr, color_data, w * h * sizeof(color_t));
+        return;
+    }
+
+    /* otherwise copy one line at the time */
+    const int data_stride = w * sizeof(uint16_t);
+    uint16_t* screen_ptr = &disp_buf[calculatedx + calculatedy * CONFIG_DISPLAY_WIDTH];
+    const uint16_t* data_ptr = color_data;
+
+    for (int k = 0; k < h; ++k) {
+        jmemcpy(screen_ptr, data_ptr, data_stride);
+        screen_ptr += CONFIG_DISPLAY_WIDTH;
+        data_ptr += w;
+    }
+#else
+    // Sem framebuffer completo, desenha diretamente no LCD
+    for (int row = 0; row < h; ++row) {
+        const uint16_t* line = &color_data[row * w];
+        tft_draw_rgb565_hline(calculatedx, calculatedy + row, line, w);
+    }
+#endif
+
+#else // !CONFIG_RPI_LCD_DISPLAY
+    JADE_ASSERT(ph);
     const int calculatedx = x - CONFIG_DISPLAY_OFFSET_X;
     const int calculatedy = y - CONFIG_DISPLAY_OFFSET_Y;
 #if (defined(CONFIG_BOARD_TYPE_M5_CORES3) || defined(CONFIG_BOARD_TYPE_TTGO_TWATCHS3)                                  \
@@ -301,6 +370,7 @@ inline void display_hw_draw_bitmap(int x, int y, int w, int h, const uint16_t* c
     ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(
         ph, calculatedx, calculatedy, x - CONFIG_DISPLAY_OFFSET_X + w, calculatedy + h, color_data));
 #endif
+#endif // CONFIG_RPI_LCD_DISPLAY
 }
 
 #ifdef CONFIG_DISPLAY_FULL_FRAME_BUFFER
@@ -386,6 +456,16 @@ static inline void switch_buffer(void)
  * single/double full screen buffer) */
 void display_hw_flush(void)
 {
+#ifdef CONFIG_RPI_LCD_DISPLAY
+    // Envia o framebuffer inteiro para o display rpi_lcd
+    for (int row = 0; row < CONFIG_DISPLAY_HEIGHT; ++row) {
+        uint16_t* line = &disp_buf[row * CONFIG_DISPLAY_WIDTH];
+        tft_draw_rgb565_hline(0, row, line, CONFIG_DISPLAY_WIDTH);
+    }
+#ifdef CONFIG_DISPLAY_FULL_FRAME_BUFFER_DOUBLE
+    switch_buffer();
+#endif
+#else
     ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(ph, 0, 0, CONFIG_DISPLAY_WIDTH, CONFIG_DISPLAY_HEIGHT, disp_buf));
 #ifdef CONFIG_DISPLAY_FULL_FRAME_BUFFER_DOUBLE
     /* we only need to switch buffer if we have more than one and we don't bother waiting for writes */
@@ -393,6 +473,7 @@ void display_hw_flush(void)
 #else
     /* if we only have one frame buffer we always wait for it to written */
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#endif
 #endif
 }
 #endif // FRAME BUFFER

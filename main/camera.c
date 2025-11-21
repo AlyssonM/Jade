@@ -537,7 +537,7 @@ void jade_camera_process_images(camera_process_fn_t fn, void* ctx, const bool sh
     const UBaseType_t mem_caps = MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL;
 #endif
 
-    const uint32_t stack_size = 16 * 1024;
+      const uint32_t stack_size = 16 * 1024;
     TaskHandle_t camera_task;
     const BaseType_t retval = xTaskCreatePinnedToCoreWithCaps(&jade_camera_task, "jade_camera", stack_size,
         &camera_config, JADE_TASK_PRIO_CAMERA, &camera_task, JADE_CORE_SECONDARY, mem_caps);
@@ -549,9 +549,9 @@ void jade_camera_process_images(camera_process_fn_t fn, void* ctx, const bool sh
     vTaskDeleteWithCaps(camera_task);
     jade_camera_stop();
 
-    // Remove the minimum idle timeout
-    idletimer_set_min_timeout_secs(0);
-}
+      // Remove the minimum idle timeout
+      idletimer_set_min_timeout_secs(0);
+  }
 
 #else // CONFIG_HAS_CAMERA
 

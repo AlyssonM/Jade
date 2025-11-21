@@ -1,4 +1,9 @@
 #include "jade_assert.h"
+
+// In non-amalgamated builds, this file provides the implementation of
+// jade_abort() and the abort wrapper. In amalgamated builds, the same
+// code is pulled into amalgamated.c, so we avoid compiling it twice.
+
 #ifndef AMALGAMATED_BUILD
 #include "gui.h"
 #include "keychain.h"
@@ -34,10 +39,10 @@ void jade_abort(const char* file, const int line_n)
     __real_abort();
     __builtin_unreachable();
 }
-#endif // AMALGAMATED_BUILD
 
 // Wrap the real abort in the entire firmware so that ours gets called instead
 // (see CMakeLists.txt) which will in turn call the real abort
 // We do this so that we can clear the keychain and the sensitive stack
-
 void __wrap_abort(void) { jade_abort("WRAPPED", 0); }
+
+#endif // AMALGAMATED_BUILD

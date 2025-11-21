@@ -2,6 +2,8 @@
 #include "jade_assert.h"
 #include "jade_tasks.h"
 
+#include "rpi_lcd.h"
+
 #if defined(CONFIG_BOARD_TYPE_WS_TOUCH_LCD2)
 // No PMU, so relevant power files will not have been included
 #include "power/i2c.inc"
@@ -22,11 +24,59 @@
 static volatile bool shutdown_requested = false;
 static volatile bool shutdown_finished = false;
 
-esp_err_t _i2c_init_master(i2c_port_t port_num, int sda_io_num, int scl_io_num, i2c_master_bus_handle_t* handle);
-esp_err_t _i2c_deinit(i2c_master_bus_handle_t handle);
-
 static void touchscreen_task(void* ignored)
 {
+// Custom DIY board with RPi LCD + XPT2046 touch (SPI)
+#if defined(CONFIG_BOARD_TYPE_CUSTOM)
+    uint16_t x, y;
+
+    while (!shutdown_requested) {
+        if (rpi_lcd_touch_read_pixel(&x, &y)) {
+            const uint16_t first_third_end = CONFIG_DISPLAY_WIDTH / 3;
+            const uint16_t middle_thirds_end = (CONFIG_DISPLAY_WIDTH * 2) / 3;
+
+            // Usar a faixa inferior da tela para navegação
+            if (y > (CONFIG_DISPLAY_HEIGHT * 2 / 3)) {
+                if (x <= first_third_end) {
+                    gui_prev();
+                } else if (x < middle_thirds_end) {
+                    gui_front_click();
+                } else {
+                    gui_next();
+                }
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+            }
+        }
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+    }
+
+    shutdown_finished = true;
+    vTaskDelete(NULL);
+
+#else
+    // Original I2C-based touchscreen (FT5X06 / CST816S)
+    esp_lcd_touch_handle_t ret_touch = NULL;
+    // FIXME: check mirror flags?
+    const esp_lcd_touch_config_t tp_cfg = {
+        .x_max = CONFIG_DISPLAY_WIDTH + CONFIG_DISPLAY_OFFSET_X,
+        .y_max = CONFIG_DISPLAY_HEIGHT + CONFIG_DISPLAY_OFFSET_Y,
+        .rst_gpio_num = GPIO_NUM_NC,
+        .int_gpio_num = GPIO_NUM_NC,
+        .levels = {
+            .reset = 0,
+            .interrupt = 0,
+        },
+        .flags = {
+            .swap_xy = 0,
+            .mirror_x = 0,
+            .mirror_y = 0,
+        },
+    };
+
+    esp_err_t _i2c_init_master(
+        i2c_port_t port_num, int sda_io_num, int scl_io_num, i2c_master_bus_handle_t* handle);
+    esp_err_t _i2c_deinit(i2c_master_bus_handle_t handle);
+
     esp_lcd_touch_handle_t ret_touch = NULL;
     // FIXME: check mirror flags?
     const esp_lcd_touch_config_t tp_cfg = {
@@ -94,6 +144,7 @@ static void touchscreen_task(void* ignored)
     ESP_ERROR_CHECK(_i2c_deinit(touch_i2c_handle));
     shutdown_finished = true;
     vTaskDelete(NULL);
+#endif
 }
 
 void touchscreen_init(void)
