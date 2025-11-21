@@ -123,7 +123,7 @@ static void tft_cmd(uint8_t cmd)
     t.tx_buffer = &cmd;
     t.user = (void*)0;  // DC low for command
     spi_lock();
-    ret = spi_device_polling_transmit(spi, &t);
+    ret = spi_device_transmit(spi, &t);
     spi_unlock();
     assert(ret == ESP_OK);
 }
@@ -137,7 +137,7 @@ static void tft_data(uint8_t data)
     t.tx_buffer = &data;
     t.user = (void*)1;  // DC high for data
     spi_lock();
-    ret = spi_device_polling_transmit(spi, &t);
+    ret = spi_device_transmit(spi, &t);
     spi_unlock();
     assert(ret == ESP_OK);
 }
@@ -152,7 +152,7 @@ static void tft_data_buf(uint8_t *data, int len)
     t.tx_buffer = data;
     t.user = (void*)1;  // DC high for data
     spi_lock();
-    ret = spi_device_polling_transmit(spi, &t);
+    ret = spi_device_transmit(spi, &t);
     spi_unlock();
     assert(ret == ESP_OK);
 }
@@ -239,7 +239,7 @@ void tft_init_spi(void)
     spi_mutex = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(spi_mutex ? ESP_OK : ESP_FAIL);
 
-    ESP_LOGI(TAG, "SPI bus initialized (TFT@SPI2 10MHz, Touch@SPI3 1MHz)");
+    ESP_LOGI(TAG, "SPI bus initialized (TFT@SPI2 10MHz, Touch@SPI2 1MHz)");
 }
 
 // ===== Display initialization (COMPLETE SEQUENCE) =====
@@ -416,7 +416,7 @@ static uint16_t xpt2046_read_raw(uint8_t command)
     t.rx_buffer = rx;
 
     spi_lock();
-    esp_err_t ret = spi_device_polling_transmit(spi_touch, &t);
+    esp_err_t ret = spi_device_transmit(spi_touch, &t);
     spi_unlock();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Erro SPI no touch: %d", ret);

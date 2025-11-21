@@ -448,7 +448,12 @@ static bool ota_allowed(const jade_msg_source_t ota_source)
 // Message dispatcher - expects valid cbor messages, routed by 'method'
 static void dispatch_message(jade_process_t* process)
 {
-    ASSERT_HAS_CURRENT_MESSAGE(process);
+    if (!HAS_CURRENT_MESSAGE(process)) {
+        // Mensagem inválida ou contexto não inicializado; em vez de disparar
+        // um assert em loop, rejeitamos e voltamos ao dashboard.
+        JADE_LOGE("dispatch_message() called with no current message - ignoring");
+        return;
+    }
     JADE_ASSERT(process->ctx.cbor);
     JADE_ASSERT(process->ctx.cbor_len);
 

@@ -332,7 +332,13 @@ gui_activity_t* make_show_message_activity(const char* message[], const size_t m
         const size_t msgextent = message_size * h;
         toppad = msgextent < yextent ? (yextent - msgextent) / 2 : 0; // top padding to centre message
         JADE_LOGD("ypct, yextent, msgextent, toppad: %u, %u, %u, %u", ypct, yextent, msgextent, toppad);
-        JADE_ASSERT(toppad < 100); // sanity check
+        if (toppad >= 100) {
+            // Em telas grandes com poucas linhas de texto o padding pode ficar
+            // muito alto; em vez de disparar um assert e potencialmente
+            // recursar a criação de diálogos, simplesmente limitamos.
+            JADE_LOGW("dialog toppad too large (%u), clamping to 0", toppad);
+            toppad = 0;
+        }
 
         switch (message_size) {
         case 2:
