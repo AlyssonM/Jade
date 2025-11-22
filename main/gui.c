@@ -2414,10 +2414,10 @@ static bool update_updateables(void)
 // gui task, for managing display/activities
 static void gui_task(void* args)
 {
-    // Flush/clear display as soon as we're able
-    JADE_SEMAPHORE_TAKE(gui_mutex);
+    // Flush/clear display as soon as we're able.
+    // Não precisamos do gui_mutex aqui porque ainda não há
+    // nenhuma activity configurada nem drawing concorrente.
     display_flush();
-    JADE_SEMAPHORE_GIVE(gui_mutex);
 
     // Loop to periodically handle gui events
     const TickType_t period = 1000 / GUI_TARGET_FRAMERATE / portTICK_PERIOD_MS;
@@ -2430,7 +2430,8 @@ static void gui_task(void* args)
         // time each loop, just let vTaskDelayUntil() track the 'last_wake' count.
         vTaskDelayUntil(&last_wake, period);
 
-        // Take the gui semaphore while the gui task is awake
+        // Process GUI state under gui_mutex, mas faça o flush
+        // de vídeo fora do mutex para reduzir contenção.
         JADE_SEMAPHORE_TAKE(gui_mutex);
 
         // Check the input queue - repaint node or set new activity if need be
@@ -2447,14 +2448,15 @@ static void gui_task(void* args)
             updated = update_updateables();
         }
 
-        // Update status bar if required
+        // Decide se precisamos flushar o display
         const bool force_redraw = false;
-        if (update_status_bar(force_redraw) || updated || jobs_handled) {
-            // Flush
-            display_flush();
-        }
+        const bool need_flush = update_status_bar(force_redraw) || updated || jobs_handled;
 
         JADE_SEMAPHORE_GIVE(gui_mutex);
+
+        if (need_flush) {
+            display_flush();
+        }
     }
 
     vTaskDelete(NULL);

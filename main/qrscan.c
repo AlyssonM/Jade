@@ -10,7 +10,11 @@
 #include "utils/malloc_ext.h"
 #include "utils/util.h"
 
-#define SCAN_MARGIN 20
+// Margin around the QR scan area, in pixels.
+// A larger margin means a smaller central region is analysed,
+// which reduces CPU work per frame and makes scanning feel snappier,
+// at the cost of requiring the QR to be kept nearer the centre.
+#define SCAN_MARGIN 40
 
 // Inspect qrcodes and try to extract payload - whether any were seen and any
 // string data extracted are stored in the qr_data struct passed.
@@ -137,8 +141,8 @@ bool scan_qr(const size_t width, const size_t height, const uint8_t* data, const
     JADE_ASSERT(qret == 0);
     qr_data->len = 0;
 
-    JADE_LOGE("SCAN WIDTH: %u", scan_width);
-    JADE_LOGE("SCAN HEIGHT: %u", scan_width);
+    JADE_LOGD("SCAN WIDTH: %u", scan_width);
+    JADE_LOGD("SCAN HEIGHT: %u", scan_width);
 
     const bool ret = qr_recognize(width, height, data, len, qr_data);
 
@@ -178,8 +182,8 @@ bool jade_camera_scan_qr(
     JADE_ASSERT(qret == 0);
     qr_data->len = 0;
 
-    JADE_LOGE("SCAN WIDTH: %u", scan_width);
-    JADE_LOGE("SCAN HEIGHT: %u", scan_width);
+    JADE_LOGD("SCAN WIDTH: %u", scan_width);
+    JADE_LOGD("SCAN HEIGHT: %u", scan_width);
 
     // Run the camera task trying to interpet frames as qr-codes
     const bool show_camera_ui = true;

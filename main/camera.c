@@ -427,7 +427,10 @@ static void jade_camera_task(void* data)
 
     // Loop periodically refreshes screen image from camera, and waits for button event
     bool done = false;
+    uint32_t frame_counter = 0;
     while (!done) {
+        ++frame_counter;
+
         // Capture camera output
         camera_fb_t* const fb = esp_camera_fb_get();
         if (!fb) {
@@ -438,22 +441,26 @@ static void jade_camera_task(void* data)
         JADE_ASSERT(fb->width == CAMERA_IMAGE_WIDTH);
         JADE_ASSERT(fb->height == CAMERA_IMAGE_HEIGHT);
 
-        // If we have a gui, update the image on screen and check for button events
+        // If we have a gui, update a subset of frames on screen and check for button events
         if (camera_config->show_ui) {
-            // Copy from camera output to screen image
-            // (Ensure source image large enough to be scaled down to display image size)
-            JADE_ASSERT(fb->len >= UI2CAM(UI2CAM(image_size))); // x and y scaled
-            uint8_t(*image_matrix)[DISPLAY_IMAGE_WIDTH] = image_buffer;
-            const uint8_t(*fb_matrix)[CAMERA_IMAGE_WIDTH] = (const uint8_t(*)[CAMERA_IMAGE_WIDTH])fb->buf;
-            copy_camera_image(image_matrix, fb_matrix);
-            gui_update_picture(image_node, &pic, false);
+            const bool do_ui_update = ((frame_counter % 2) == 0);
 
-            // Ensure showing camera activity/captured image
-            if (gui_current_activity() != act) {
-                gui_set_current_activity(act);
+            if (do_ui_update) {
+                // Copy from camera output to screen image
+                // (Ensure source image large enough to be scaled down to display image size)
+                JADE_ASSERT(fb->len >= UI2CAM(UI2CAM(image_size))); // x and y scaled
+                uint8_t(*image_matrix)[DISPLAY_IMAGE_WIDTH] = image_buffer;
+                const uint8_t(*fb_matrix)[CAMERA_IMAGE_WIDTH] = (const uint8_t(*)[CAMERA_IMAGE_WIDTH])fb->buf;
+                copy_camera_image(image_matrix, fb_matrix);
+                gui_update_picture(image_node, &pic, false);
+
+                // Ensure showing camera activity/captured image
+                if (gui_current_activity() != act) {
+                    gui_set_current_activity(act);
+                }
             }
 
-            // Check for button events
+            // Check for button events every loop (even if frame not redrawn)
             int32_t ev_id;
             if (sync_wait_event(event_data, NULL, &ev_id, NULL, 10 / portTICK_PERIOD_MS) == ESP_OK) {
                 if (ev_id == BTN_CAMERA_CLICK) {
