@@ -1,5 +1,11 @@
-name: GitHub Actions test
-on: [push]
+name: GitHub Actions
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
 jobs:
   build:
 
@@ -16,3 +22,51 @@ jobs:
         esp_idf_version: v5.5
         target: esp32
         command: idf.py -D SDKCONFIG_DEFAULTS="configs/sdkconfig_jade_v1_1.defaults" build all size-components size
+
+  build-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v2
+        with:
+          submodules: 'recursive'
+      - name: Build ESP32-CAM Jade (Touch + TFT)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5
+          target: esp32
+          command: idf.py -D SDKCONFIG_DEFAULTS="configs/sdkconfig_diycam_tft_esp32-cam.defaults" build
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: esp32cam-tft-touch-firmware
+          path: |
+            build/jade.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            build/jade.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+          name: ESP32-CAM Jade (Touch + TFT) ${GITHUB_REF#refs/tags/}
+          body: |
+            First release of the ESP32-CAM Jade variant with TFT display and touchscreen gesture navigation.
+
+            Highlights:
+            - Touch gestures: horizontal and vertical swipe for menu navigation; center tap to select.
+            - Built against ESP-IDF v5.5 targeting `esp32`.
+
+            Flashing (ESP-IDF):
+            1. Copy defaults: `cp configs/sdkconfig_diycam_tft_esp32-cam.defaults sdkconfig.defaults`
+            2. Flash: `idf.py -b 115200 flash monitor`
+
+            Config check:
+            - Ensure `CONFIG_DISPLAY_TOUCHSCREEN=y` in your sdkconfig.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
