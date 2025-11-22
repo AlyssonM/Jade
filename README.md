@@ -7,6 +7,51 @@ They are not for updating the firmware of an official Blockstream Jade hw unit -
 
 To build you can use the docker image (see Dockerfile) or install the esp-idf toolchain and repo following the commands in this readme.
 
+## ESP32-CAM Jade (Touch + TFT)
+
+This variant targets ESP32-CAM hardware with TFT and touchscreen, providing gesture navigation. Use the provided configs and enable touchscreen support.
+
+### Build and Flash
+
+- Ensure ESP-IDF environment is set up as described above.
+- From repo root:
+
+```
+cp configs/sdkconfig_diycam_tft_esp32-cam.defaults sdkconfig.defaults
+idf.py -b 115200 flash monitor
+```
+
+- Confirm touchscreen is enabled:
+
+```
+CONFIG_DISPLAY_TOUCHSCREEN=y
+```
+
+### Touch Navigation
+
+- Swipe esquerda/direita: navega itens em menus horizontais (`gui_prev`/`gui_next`).
+- Swipe cima/baixo: navega itens em menus verticais (`gui_prev`/`gui_next`).
+- Tap central: ativa o item selecionado (`gui_front_click`).
+
+Implementation lives in `main/input/touchscreen.inc`:
+- I2C touch: c:\ESP-Projects\Jade\main\input\touchscreen.inc:121–147
+- SPI custom: c:\ESP-Projects\Jade\main\input\touchscreen.inc:29–53
+
+Selection and action handling is provided by the GUI core:
+- Prev/next selection: c:\ESP-Projects\Jade\main\gui.c:357–410, 465–520
+- Click action dispatch: c:\ESP-Projects\Jade\main\gui.c:522–533
+
+### Customization
+
+- Gesture threshold: adjust 40 px deltas in `touchscreen.inc` for sensitivity.
+- Tap area: by default, the center third of the screen width triggers selection; can be refined to item bounding-box.
+- Orientation/mirroring is handled by existing GUI/render settings; gestures are independent of layout.
+
+### Notes
+
+- For Waveshare ESP32-S3 Touch LCD 2 and similar DIY devices, see `diy/waveshare/README.md` for hardware specifics.
+- For other DIY boards, consult the `diy/` directory and choose the closest `sdkconfig.defaults` file.
+
 # DIY Hardware & Programming Notes
 For information about suitable DIY hardware, as well as suggested configuration profiles and notes on secure boot.
 [DIY Guide](./diy/)
@@ -241,50 +286,6 @@ This installs the `jadepy` directory from this repo.  See [jade-client-requireme
 
 The collection is subject to gpl3 but individual source components can be used under their specific licenses.
 
-## ESP32-CAM Jade (Touch + TFT)
-
-This variant targets ESP32-CAM hardware with TFT and touchscreen, providing gesture navigation. Use the provided configs and enable touchscreen support.
-
-### Build and Flash
-
-- Ensure ESP-IDF environment is set up as described above.
-- From repo root:
-
-```
-cp configs/sdkconfig_diycam_tft_esp32-cam.defaults sdkconfig.defaults
-idf.py -b 115200 flash monitor
-```
-
-- Confirm touchscreen is enabled:
-
-```
-CONFIG_DISPLAY_TOUCHSCREEN=y
-```
-
-### Touch Navigation
-
-- Swipe esquerda/direita: navega itens em menus horizontais (`gui_prev`/`gui_next`).
-- Swipe cima/baixo: navega itens em menus verticais (`gui_prev`/`gui_next`).
-- Tap central: ativa o item selecionado (`gui_front_click`).
-
-Implementation lives in `main/input/touchscreen.inc`:
-- I2C touch: c:\ESP-Projects\Jade\main\input\touchscreen.inc:121–147
-- SPI custom: c:\ESP-Projects\Jade\main\input\touchscreen.inc:29–53
-
-Selection and action handling is provided by the GUI core:
-- Prev/next selection: c:\ESP-Projects\Jade\main\gui.c:357–410, 465–520
-- Click action dispatch: c:\ESP-Projects\Jade\main\gui.c:522–533
-
-### Customization
-
-- Gesture threshold: adjust 40 px deltas in `touchscreen.inc` for sensitivity.
-- Tap area: by default, the center third of the screen width triggers selection; can be refined to item bounding-box.
-- Orientation/mirroring is handled by existing GUI/render settings; gestures are independent of layout.
-
-### Notes
-
-- For Waveshare ESP32-S3 Touch LCD 2 and similar DIY devices, see `diy/waveshare/README.md` for hardware specifics.
-- For other DIY boards, consult the `diy/` directory and choose the closest `sdkconfig.defaults` file.
 
 ## ESP-IDF Direct Build (Quickstart)
 
