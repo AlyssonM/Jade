@@ -2483,6 +2483,36 @@ void gui_front_click(void)
     }
 }
 
+void gui_front_click_at(uint16_t x, uint16_t y)
+{
+    if (!idletimer_register_activity(true)) {
+        bool handled_button = false;
+        if (current_activity && current_activity->selectables) {
+            selectable_t* begin = current_activity->selectables;
+            selectable_t* cur = begin;
+            do {
+                gui_view_node_t* node = cur->node;
+                if (node->is_active) {
+                    dispWin_t cs = node->render_data.padded_constraints;
+                    if (x >= cs.x1 && x < cs.x2 && y >= cs.y1 && y < cs.y2) {
+                        select_node(node);
+                        if (node->kind == BUTTON && gui_click_event == GUI_FRONT_CLICK_EVENT
+                            && node->button->click_event_id != GUI_BUTTON_EVENT_NONE) {
+                            select_action(current_activity);
+                            handled_button = true;
+                        }
+                        break;
+                    }
+                }
+                cur = cur->next;
+            } while (cur != begin);
+        }
+        if (!handled_button) {
+            esp_event_post(GUI_EVENT, GUI_FRONT_CLICK_EVENT, NULL, 0, 50 / portTICK_PERIOD_MS);
+        }
+    }
+}
+
 void select_next_right(void)
 {
     if (!idletimer_register_activity(true)) {

@@ -261,6 +261,10 @@ typedef enum {
     BTN_QR_OPTIONS_EXIT,
     BTN_QR_DISPLAY_EXIT,
 
+    BTN_PIN_DIGIT_UP,
+    BTN_PIN_DIGIT_DOWN,
+    BTN_PIN_DIGIT_SELECT,
+
     // NOTE: Always leave these ones last as keyboard buttons use
     // BTN_KEYBOARD_ASCII_OFFSET + <ascii-value>
     BTN_KEYBOARD_BACKSPACE,
