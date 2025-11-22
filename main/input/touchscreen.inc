@@ -29,23 +29,45 @@ static void touchscreen_task(void* ignored)
 // Custom DIY board with RPi LCD + XPT2046 touch (SPI)
 #if defined(CONFIG_BOARD_TYPE_CUSTOM)
     uint16_t x, y;
+    uint16_t last_x = 0;
+    uint16_t last_y = 0;
+    bool prev_pressed = false;
+    bool has_swiped = false;
 
     while (!shutdown_requested) {
         if (rpi_lcd_touch_read_pixel(&x, &y)) {
-            const uint16_t first_third_end = CONFIG_DISPLAY_WIDTH / 3;
-            const uint16_t middle_thirds_end = (CONFIG_DISPLAY_WIDTH * 2) / 3;
-
-            // Usar a faixa inferior da tela para navegação
-            if (y > (CONFIG_DISPLAY_HEIGHT * 2 / 3)) {
-                if (x <= first_third_end) {
+            if (!prev_pressed) {
+                last_x = x;
+                last_y = y;
+                has_swiped = false;
+                prev_pressed = true;
+            } else {
+                int16_t dx = (int16_t)x - (int16_t)last_x;
+                int16_t dy = (int16_t)y - (int16_t)last_y;
+                if (dx <= -40 || dy <= -40) {
                     gui_prev();
-                } else if (x < middle_thirds_end) {
-                    gui_front_click();
-                } else {
+                    has_swiped = true;
+                    last_x = x;
+                    last_y = y;
+                    vTaskDelay(120 / portTICK_PERIOD_MS);
+                } else if (dx >= 40 || dy >= 40) {
                     gui_next();
+                    has_swiped = true;
+                    last_x = x;
+                    last_y = y;
+                    vTaskDelay(120 / portTICK_PERIOD_MS);
                 }
-                vTaskDelay(100 / portTICK_PERIOD_MS);
             }
+        } else {
+            if (prev_pressed && !has_swiped) {
+                const uint16_t first_third_end = CONFIG_DISPLAY_WIDTH / 3;
+                const uint16_t middle_thirds_end = (CONFIG_DISPLAY_WIDTH * 2) / 3;
+                if (last_x > first_third_end && last_x < middle_thirds_end) {
+                    gui_front_click();
+                }
+            }
+            prev_pressed = false;
+            has_swiped = false;
         }
         vTaskDelay(20 / portTICK_PERIOD_MS);
     }
@@ -118,25 +140,49 @@ static void touchscreen_task(void* ignored)
     // FIXME: don't allow multiple touches within 300 ms?
     // FIXME: this doesn't currently work with Display -> Flip Orientation feature
     // but it could by changing the touch_y[0] > 200 logic with < 40 and inverting prev with next and viceversa
+    int16_t start_x = -1;
+    int16_t start_y = -1;
+    bool prev_pressed = false;
+    bool has_swiped = false;
     while (!shutdown_requested) {
         if (esp_lcd_touch_read_data(ret_touch) == ESP_OK) {
             bool touchpad_pressed
                 = esp_lcd_touch_get_coordinates(ret_touch, touch_x, touch_y, touch_strength, &touch_cnt, 1);
             if (touchpad_pressed) {
-                const uint16_t first_third_end = CONFIG_DISPLAY_WIDTH / 3;
-                const uint16_t middle_thirds_end = (CONFIG_DISPLAY_WIDTH * 2) / 3;
-                if (touch_y[0] > 200) {
-                    if (touch_x[0] <= first_third_end) {
+                if (!prev_pressed) {
+                    start_x = (int16_t)touch_x[0];
+                    start_y = (int16_t)touch_y[0];
+                    has_swiped = false;
+                } else {
+                    int16_t dx = (int16_t)touch_x[0] - start_x;
+                    int16_t dy = (int16_t)touch_y[0] - start_y;
+                    if (dx <= -40 || dy <= -40) {
                         gui_prev();
-                    } else if (touch_x[0] > first_third_end && touch_x[0] < middle_thirds_end) {
-                        gui_front_click();
-                    } else if (touch_x[0] >= middle_thirds_end) {
+                        has_swiped = true;
+                        start_x = (int16_t)touch_x[0];
+                        start_y = (int16_t)touch_y[0];
+                        vTaskDelay(120 / portTICK_PERIOD_MS);
+                    } else if (dx >= 40 || dy >= 40) {
                         gui_next();
-                    } else {
-                        continue;
+                        has_swiped = true;
+                        start_x = (int16_t)touch_x[0];
+                        start_y = (int16_t)touch_y[0];
+                        vTaskDelay(120 / portTICK_PERIOD_MS);
                     }
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
                 }
+                prev_pressed = true;
+            } else {
+                if (prev_pressed && !has_swiped) {
+                    const uint16_t first_third_end = CONFIG_DISPLAY_WIDTH / 3;
+                    const uint16_t middle_thirds_end = (CONFIG_DISPLAY_WIDTH * 2) / 3;
+                    if (start_x > first_third_end && start_x < middle_thirds_end) {
+                        gui_front_click();
+                    }
+                }
+                prev_pressed = false;
+                start_x = -1;
+                start_y = -1;
+                has_swiped = false;
             }
         }
         vTaskDelay(20 / portTICK_PERIOD_MS);
