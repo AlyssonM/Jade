@@ -334,8 +334,6 @@ inline void display_hw_draw_bitmap(int x, int y, int w, int h, const uint16_t* c
 
 #else // !CONFIG_RPI_LCD_DISPLAY
     JADE_ASSERT(ph);
-    const int calculatedx = x - CONFIG_DISPLAY_OFFSET_X;
-    const int calculatedy = y - CONFIG_DISPLAY_OFFSET_Y;
 #if (defined(CONFIG_BOARD_TYPE_M5_CORES3) || defined(CONFIG_BOARD_TYPE_TTGO_TWATCHS3)                                  \
     || defined(CONFIG_BOARD_TYPE_WS_TOUCH_LCD2))                                                                       \
     && defined(CONFIG_DISPLAY_FULL_FRAME_BUFFER)
