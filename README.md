@@ -78,15 +78,15 @@ origin of the repo in the docker.
 
 Jade requires the esp-idf sdk.
 
-More information is available in the [Espressif official guide](https://docs.espressif.com/projects/esp-idf/en/v5.4/esp32/get-started/index.html).
+More information is available in the [Espressif official guide](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32/get-started/index.html).
 
 Get the esp-idf sdk and required tools:
 
 ```
 mkdir ~/esp
 cd ~/esp
-git clone -b v5.4 --recursive https://github.com/espressif/esp-idf.git
-cd ~/esp/esp-idf && git checkout 67c1de1eebe095d554d281952fde63c16ee2dca0 && ./install.sh --enable-gdbgui esp32 esp32s3
+git clone -b v5.5 --recursive https://github.com/espressif/esp-idf.git
+cd ~/esp/esp-idf && ./install.sh --enable-gdbgui esp32 esp32s3
 python ~/esp/esp-idf/tools/idf_tools.py install qemu-xtensa
 ```
 
