@@ -60,7 +60,7 @@ Touch-only navigation. No physical button required.
 ## Connection Diagram
 Add or replace the following image with your specific wiring diagram:
 
-![Connection Diagram](../connection_diagram.jpg)
+![Connection Diagram](connection_diagram.jpg)
 
 ## Build & Flash
 ESP-IDF profile for this variant:
