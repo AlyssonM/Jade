@@ -17,6 +17,8 @@ static inline char get_pin_value(size_t index)
     return PIN_CHARS[index];
 }
 
+static void pin_digit_button_handler(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data);
+
 static void reinitialise_current_pin_digit(pin_insert_t* pin_insert)
 {
     JADE_ASSERT(pin_insert);
@@ -46,12 +48,18 @@ static void update_digit_node(pin_insert_t* pin_insert, uint8_t i)
         gui_set_borders(pin_insert->pin_digit_nodes[i].fill_node, TFT_LIGHTGREY, 2, GUI_BORDER_ALL);
         gui_update_text(pin_insert->pin_digit_nodes[i].up_arrow_node, "");
         gui_update_text(pin_insert->pin_digit_nodes[i].down_arrow_node, "");
+        gui_set_active(pin_insert->pin_digit_nodes[i].up_arrow_node->parent, false);
+        gui_set_active(pin_insert->pin_digit_nodes[i].digit_node->parent, false);
+        gui_set_active(pin_insert->pin_digit_nodes[i].down_arrow_node->parent, false);
         break;
     case SELECTED:
         gui_set_color(pin_insert->pin_digit_nodes[i].fill_node, gui_get_highlight_color());
         gui_set_borders(pin_insert->pin_digit_nodes[i].fill_node, gui_get_highlight_color(), 2, GUI_BORDER_ALL);
         gui_update_text(pin_insert->pin_digit_nodes[i].up_arrow_node, "K");
         gui_update_text(pin_insert->pin_digit_nodes[i].down_arrow_node, "L");
+        gui_set_active(pin_insert->pin_digit_nodes[i].up_arrow_node->parent, true);
+        gui_set_active(pin_insert->pin_digit_nodes[i].digit_node->parent, true);
+        gui_set_active(pin_insert->pin_digit_nodes[i].down_arrow_node->parent, true);
         strdigit[0] = PIN_CHARS[pin_insert->current_selected_value];
         break;
     case SET:
@@ -59,6 +67,9 @@ static void update_digit_node(pin_insert_t* pin_insert, uint8_t i)
         gui_set_borders(pin_insert->pin_digit_nodes[i].fill_node, gui_get_highlight_color(), 2, GUI_BORDER_ALL);
         gui_update_text(pin_insert->pin_digit_nodes[i].up_arrow_node, "");
         gui_update_text(pin_insert->pin_digit_nodes[i].down_arrow_node, "");
+        gui_set_active(pin_insert->pin_digit_nodes[i].up_arrow_node->parent, false);
+        gui_set_active(pin_insert->pin_digit_nodes[i].digit_node->parent, false);
+        gui_set_active(pin_insert->pin_digit_nodes[i].down_arrow_node->parent, false);
         strdigit[0] = pin_insert->pin_digits_shown ? PIN_CHARS[pin_insert->pin[i]] : '*';
         break;
     }
@@ -106,26 +117,59 @@ void make_pin_insert_activity(pin_insert_t* pin_insert, const char* title, const
         gui_set_parent(vsplit, node);
         // no need to store the vsplit
 
-        // Up arrow
+        gui_view_node_t* btn;
+        gui_make_button(&btn, TFT_BLACK, TFT_BLACK, BTN_PIN_DIGIT_UP, NULL);
+        gui_set_parent(btn, vsplit);
         gui_make_text_font(&node, "K", TFT_WHITE, JADE_SYMBOLS_16x16_FONT);
         gui_set_align(node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
-        gui_set_parent(node, vsplit);
+        gui_set_parent(node, btn);
         pin_insert->pin_digit_nodes[i].up_arrow_node = node;
 
-        // Digit
+        gui_make_button(&btn, TFT_BLACK, TFT_BLACK, BTN_PIN_DIGIT_SELECT, NULL);
+        gui_set_parent(btn, vsplit);
         gui_make_text_font(&node, "", TFT_WHITE, DEJAVU24_FONT);
         gui_set_align(node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
-        gui_set_parent(node, vsplit);
+        gui_set_parent(node, btn);
         gui_set_padding(node, GUI_MARGIN_ALL_DIFFERENT, 5, 0, 0, 0);
         pin_insert->pin_digit_nodes[i].digit_node = node;
 
-        // Down arrow
+        gui_make_button(&btn, TFT_BLACK, TFT_BLACK, BTN_PIN_DIGIT_DOWN, NULL);
+        gui_set_parent(btn, vsplit);
         gui_make_text_font(&node, "L", TFT_WHITE, JADE_SYMBOLS_16x16_FONT);
         gui_set_align(node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
-        gui_set_parent(node, vsplit);
+        gui_set_parent(node, btn);
         pin_insert->pin_digit_nodes[i].down_arrow_node = node;
 
         update_digit_node(pin_insert, i);
+    }
+
+    gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_PIN_DIGIT_UP, pin_digit_button_handler,
+        pin_insert);
+    gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_PIN_DIGIT_DOWN, pin_digit_button_handler,
+        pin_insert);
+    gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_PIN_DIGIT_SELECT, pin_digit_button_handler,
+        pin_insert);
+}
+
+static void pin_digit_button_handler(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data)
+{
+    pin_insert_t* pin_insert = (pin_insert_t*)handler_arg;
+    if (!pin_insert) {
+        return;
+    }
+
+    switch (id) {
+    case BTN_PIN_DIGIT_UP:
+        esp_event_post(GUI_EVENT, GUI_WHEEL_RIGHT_EVENT, NULL, 0, 50 / portTICK_PERIOD_MS);
+        break;
+    case BTN_PIN_DIGIT_DOWN:
+        esp_event_post(GUI_EVENT, GUI_WHEEL_LEFT_EVENT, NULL, 0, 50 / portTICK_PERIOD_MS);
+        break;
+    case BTN_PIN_DIGIT_SELECT:
+        esp_event_post(GUI_EVENT, GUI_FRONT_CLICK_EVENT, NULL, 0, 50 / portTICK_PERIOD_MS);
+        break;
+    default:
+        break;
     }
 }
 
