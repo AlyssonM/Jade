@@ -482,6 +482,7 @@ gui_activity_t* gui_display_splash(void);
 
 void gui_wheel_click(void);
 void gui_front_click(void);
+void gui_front_click_at(uint16_t x, uint16_t y);
 void gui_next(void);
 void gui_prev(void);
 

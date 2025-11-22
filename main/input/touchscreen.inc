@@ -60,11 +60,7 @@ static void touchscreen_task(void* ignored)
             }
         } else {
             if (prev_pressed && !has_swiped) {
-                const uint16_t first_third_end = CONFIG_DISPLAY_WIDTH / 3;
-                const uint16_t middle_thirds_end = (CONFIG_DISPLAY_WIDTH * 2) / 3;
-                if (last_x > first_third_end && last_x < middle_thirds_end) {
-                    gui_front_click();
-                }
+                gui_front_click_at(last_x, last_y);
             }
             prev_pressed = false;
             has_swiped = false;
@@ -173,11 +169,7 @@ static void touchscreen_task(void* ignored)
                 prev_pressed = true;
             } else {
                 if (prev_pressed && !has_swiped) {
-                    const uint16_t first_third_end = CONFIG_DISPLAY_WIDTH / 3;
-                    const uint16_t middle_thirds_end = (CONFIG_DISPLAY_WIDTH * 2) / 3;
-                    if (start_x > first_third_end && start_x < middle_thirds_end) {
-                        gui_front_click();
-                    }
+                    gui_front_click_at((uint16_t)start_x, (uint16_t)start_y);
                 }
                 prev_pressed = false;
                 start_x = -1;
