@@ -251,7 +251,7 @@ This variant targets ESP32-CAM hardware with TFT and touchscreen, providing gest
 - From repo root:
 
 ```
-cp configs/sdkconfig_diycam_esp32-cam.defaults sdkconfig.defaults
+cp configs/sdkconfig_diycam_tft_esp32-cam.defaults sdkconfig.defaults
 idf.py -b 115200 flash monitor
 ```
 
@@ -285,3 +285,82 @@ Selection and action handling is provided by the GUI core:
 
 - For Waveshare ESP32-S3 Touch LCD 2 and similar DIY devices, see `diy/waveshare/README.md` for hardware specifics.
 - For other DIY boards, consult the `diy/` directory and choose the closest `sdkconfig.defaults` file.
+
+## ESP-IDF Direct Build (Quickstart)
+
+This repository is a native ESP-IDF project. Build and flash directly using the Espressif toolchain.
+
+### Prerequisites
+
+- ESP-IDF v5.4 installed and exported in the current shell
+- Python 3.11 recommended for dependency compatibility
+
+### Windows (PowerShell)
+
+```
+git clone --recursive https://github.com/AlyssonM/Jade.git
+cd Jade
+git submodule update --init --recursive
+# ESP32-CAM sem TFT:
+copy configs\sdkconfig_diycam_esp32-cam.defaults sdkconfig.defaults
+# ESP32-CAM com TFT + Touch:
+copy configs\sdkconfig_diycam_tft_esp32-cam.defaults sdkconfig.defaults
+"%USERPROFILE%\esp\esp-idf\export.bat"
+idf.py -b 115200 flash monitor
+```
+
+### Linux/macOS (bash)
+
+```
+git clone --recursive https://github.com/AlyssonM/Jade.git
+cd Jade
+git submodule update --init --recursive
+# ESP32-CAM sem TFT:
+cp configs/sdkconfig_diycam_esp32-cam.defaults sdkconfig.defaults
+# ESP32-CAM com TFT + Touch:
+cp configs/sdkconfig_diycam_tft_esp32-cam.defaults sdkconfig.defaults
+. $HOME/esp/esp-idf/export.sh
+idf.py -b 115200 flash monitor
+```
+
+Tips:
+- Use `idf.py menuconfig` to adjust options; if you change defaults, delete `sdkconfig` before rebuilding.
+- Choose a different `configs/sdkconfig_*.defaults` to match your hardware.
+
+## PlatformIO Build (ESP-IDF Framework)
+
+PlatformIO can build ESP-IDF projects using `framework = espidf`. This repository is not a PlatformIO project by default, but you can create a wrapper project and point it to Jade sources.
+
+### Steps
+
+- Install PlatformIO Core: `pip install platformio`
+- Create a new project directory and a `platformio.ini` file:
+
+```
+[env:esp32cam-jade]
+platform = espressif32
+framework = espidf
+board = esp32cam
+monitor_speed = 115200
+board_build.sdkconfig = sdkconfig
+```
+
+- Copy or add Jade sources to the PlatformIO project:
+  - Option A: add this repository as a git submodule and set your PlatformIO project root to the Jade repo.
+  - Option B: copy `main/`, `components/`, and the root `CMakeLists.txt` into the PlatformIO project root.
+
+- Provide `sdkconfig` for PlatformIO:
+  - ESP32-CAM sem TFT: `cp configs/sdkconfig_diycam_esp32-cam.defaults sdkconfig`
+  - ESP32-CAM com TFT + Touch: `cp configs/sdkconfig_diycam_tft_esp32-cam.defaults sdkconfig`
+
+- Build and flash:
+
+```
+pio run
+pio run -t upload
+pio device monitor -b 115200
+```
+
+Notes:
+- For complex hardware profiles, prefer building directly with ESP-IDF (`idf.py`) to use the project’s native configuration and tooling.
+- If your board uses a different upload port/speed, add `upload_port` and `upload_speed` to `platformio.ini`.
