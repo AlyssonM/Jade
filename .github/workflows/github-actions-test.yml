@@ -50,11 +50,16 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
           files: |
             build/jade.bin
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
-          name: ESP32-CAM Jade (Touch + TFT) ${GITHUB_REF#refs/tags/}
+          name: ESP32-CAM Jade (Touch + TFT) ${{ github.ref_name }}
           body: |
             First release of the ESP32-CAM Jade variant with TFT display and touchscreen gesture navigation.
 
@@ -68,5 +73,3 @@ jobs:
 
             Config check:
             - Ensure `CONFIG_DISPLAY_TOUCHSCREEN=y` in your sdkconfig.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
