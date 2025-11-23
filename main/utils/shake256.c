@@ -102,4 +102,31 @@ int shake256_mbedtls_rnd_cb(void* ctx, uint8_t* buf, const size_t len)
     shake256_fill_data(sctx, buf, len);
     return 0;
 }
+#include <stddef.h>
+void keccak_256(const uint8_t* data, size_t data_size, uint8_t* output)
+{
+    uint64_t st[25];
+    memset(st, 0, sizeof(st));
+    unsigned int pos = 0;
+    for (size_t i = 0; i < data_size; ++i) {
+        ((uint8_t*)st)[pos] ^= data[i];
+        ++pos;
+        if (pos == 136) {
+            keccakf(st);
+            pos = 0;
+        }
+    }
+    ((uint8_t*)st)[pos] ^= 0x01;
+    ((uint8_t*)st)[135] ^= 0x80;
+    keccakf(st);
+    unsigned int out_pos = 0;
+    unsigned int rate_pos = 0;
+    while (out_pos < 32) {
+        if (rate_pos == 136) {
+            keccakf(st);
+            rate_pos = 0;
+        }
+        output[out_pos++] = ((uint8_t*)st)[rate_pos++];
+    }
+}
 #endif // AMALGAMATED_BUILD

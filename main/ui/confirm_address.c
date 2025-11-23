@@ -1,6 +1,7 @@
 #ifndef AMALGAMATED_BUILD
 #include "../button_events.h"
 #include "../ui.h"
+#include "../qrmode.h"
 #include "jade_assert.h"
 
 // Should the address be displayed a formatted grid, or as a single long string (traditional)
@@ -189,5 +190,17 @@ bool show_confirm_address_activity(const char* address, const bool default_selec
             return true;
         }
     }
+}
+
+bool show_confirm_address_with_qr_activity(const char* address, const bool default_selection)
+{
+    JADE_ASSERT(address);
+    if (!show_confirm_address_activity(address, default_selection)) {
+        return false;
+    }
+
+    const char* message[] = { "EVM Address" };
+    await_single_qr_activity(message, 1, (const uint8_t*)address, strlen(address));
+    return true;
 }
 #endif // AMALGAMATED_BUILD

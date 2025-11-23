@@ -21,6 +21,7 @@
 #include "utils/malloc_ext.h"
 #include "utils/network.h"
 #include "wallet.h"
+#include "utils/shake256.h"
 
 #include <wally_script.h>
 
@@ -86,6 +87,9 @@ bool handle_mnemonic_qr(const char* mnemonic);
 bool select_registered_wallet(const char multisig_names[][NVS_KEY_NAME_MAX_SIZE], size_t num_multisigs,
     const char descriptor_names[][NVS_KEY_NAME_MAX_SIZE], size_t num_descriptors, const char** wallet_name_out,
     bool* is_multisig);
+
+static void display_bcur_qr(const char* message[], size_t message_size, const char* bcur_type,
+    const uint8_t* cbor, size_t cbor_len, const char* help_url);
 
 // PSBT struct and functions
 struct wally_psbt;
@@ -398,6 +402,93 @@ void display_xpub_qr(void)
             break;
         }
     }
+}
+
+void display_evm_hdkey_qr(uint16_t account_index)
+{
+    uint32_t path[3] = {
+        BIP32_INITIAL_HARDENED_CHILD + 44,
+        BIP32_INITIAL_HARDENED_CHILD + 60,
+        BIP32_INITIAL_HARDENED_CHILD + (uint32_t)account_index,
+    };
+
+    uint8_t cbor[128];
+    size_t written = 0;
+    bcur_build_cbor_crypto_hdkey(path, 3, cbor, sizeof(cbor), &written);
+
+    Icon* icons = NULL;
+    size_t num_icons = 0;
+    const uint8_t qrcode_version = qr_version_from_flags(QR_DENSITY_LOW);
+    bcur_create_qr_icons(cbor, written, BCUR_TYPE_CRYPTO_HDKEY, qrcode_version, &icons, &num_icons);
+
+    char pathstr[MAX_PATH_STR_LEN(3)];
+    const bool ok = wallet_bip32_path_as_str(path, 3, pathstr, sizeof(pathstr));
+    JADE_ASSERT(ok);
+
+    const char* message[] = { "MetaMask (Airgapped)", pathstr };
+    const uint8_t frames_per_qr = qr_framerate_from_flags(QR_SPEED_LOW);
+    gui_activity_t* const act = make_show_qr_activity(message, 2, icons, num_icons, frames_per_qr, false);
+
+    while (true) {
+        gui_set_current_activity(act);
+        const int32_t ev_id = gui_activity_wait_button(act, BTN_QR_DISPLAY_EXIT);
+        if (ev_id == BTN_QR_BRIGHTNESS) {
+            gui_next_qrcode_color();
+            gui_repaint(act->root_node);
+        } else if (ev_id == BTN_QR_DISPLAY_EXIT) {
+            break;
+        }
+    }
+}
+
+static void display_eth_signature_qr(const uint8_t* request_id, size_t request_id_len, const uint8_t* sig65)
+{
+    uint8_t cbor[128];
+    size_t written = 0;
+    bcur_build_cbor_eth_signature(request_id, request_id_len, sig65, 65, cbor, sizeof(cbor), &written);
+    const char* message[] = { "ETH Signature" };
+    display_bcur_qr(message, 1, BCUR_TYPE_ETH_SIGNATURE, cbor, written, "blkstrm.com/ethsig");
+}
+
+static bool handle_eth_sign_request_qr(const uint8_t* cbor, size_t cbor_len)
+{
+    uint8_t request_id[16];
+    memset(request_id, 0, sizeof(request_id));
+    uint8_t* sign_data = NULL;
+    size_t sign_data_len = 0;
+    uint64_t chain_id = 1;
+    const bool parsed = bcur_parse_eth_sign_request(cbor, cbor_len, request_id, sizeof(request_id), &sign_data, &sign_data_len, &chain_id);
+    if (!parsed || !sign_data || !sign_data_len) {
+        const char* message[] = { "ETH Sign Request", "invalido" };
+        await_error_activity(message, 2);
+        return false;
+    }
+
+    uint8_t hash[32];
+    if (sign_data_len == 32) {
+        memcpy(hash, sign_data, 32);
+    } else {
+        keccak_256(sign_data, sign_data_len, hash);
+    }
+
+    uint32_t path[5] = {
+        BIP32_INITIAL_HARDENED_CHILD + 44,
+        BIP32_INITIAL_HARDENED_CHILD + 60,
+        BIP32_INITIAL_HARDENED_CHILD + 0,
+        0,
+        0,
+    };
+    uint8_t sig[65];
+    size_t written = 65;
+    uint8_t y_parity = 0;
+    const bool ok = wallet_sign_evm_hash(hash, sizeof(hash), path, 5, sig, sizeof(sig), &written, &y_parity);
+    if (!ok || written != 65) {
+        const char* message[] = { "Assinatura ETH", "falhou" };
+        await_error_activity(message, 2);
+        return false;
+    }
+    display_eth_signature_qr(request_id, sizeof(request_id), sig);
+    return true;
 }
 
 // Helper to get user to select and load registered wallet record
@@ -1294,6 +1385,11 @@ void handle_scan_qr(void)
             if (!handle_bcur_bytes(data, data_len)) {
                 JADE_LOGE("Processing BC-UR BYTES failed");
             }
+        } else if (!strcasecmp(type, BCUR_TYPE_ETH_SIGN_REQUEST)
+                || (strcasestr(type, BCUR_TYPE_ETH_SIGN_REQUEST) != NULL)) {
+            if (!handle_eth_sign_request_qr(data, data_len)) {
+                JADE_LOGE("Processing BC-UR ETH sign-request failed");
+            }
         } else {
             // Other - unhandled
             JADE_LOGW("Unhandled BC-UR type: %s", type);
@@ -1737,5 +1833,9 @@ void handle_qr_auth(const bool suppress_pin_change_confirmation)
         retval == pdPASS, "Failed to create auth_qr_client_task, xTaskCreatePinnedToCore() returned %d", retval);
 
     // Then we return to the dispatcher to handle messages as sent by the task we have just started
+}
+void request_local_auth_unlock(bool suppress_pin_change_confirmation)
+{
+    post_auth_msg_request(SOURCE_INTERNAL, suppress_pin_change_confirmation);
 }
 #endif // AMALGAMATED_BUILD

@@ -145,6 +145,14 @@ void get_blinding_factor_process(void* process_ptr);
 void sign_liquid_tx_process(void* process_ptr);
 void get_bip85_pubkey_process(void* process_ptr);
 void sign_bip85_digests_process(void* process_ptr);
+void get_evm_address_process(void* process_ptr);
+void sign_evm_tx_process(void* process_ptr);
+gui_activity_t* make_evm_settings_activity(void);
+bool show_confirm_address_activity(const char* address, bool default_selection);
+gui_activity_t* make_evm_receive_options_activity(
+    gui_view_node_t** account_textbox, gui_view_node_t** change_textbox, gui_view_node_t** index_textbox);
+bool show_confirm_address_with_qr_activity(const char* address, bool default_selection);
+gui_activity_t* make_locked_more_activity(void);
 #ifdef CONFIG_DEBUG_MODE
 void get_bip85_bip39_entropy_process(void* process_ptr);
 void get_bip85_rsa_entropy_process(void* process_ptr);
@@ -574,6 +582,8 @@ static void dispatch_message(jade_process_t* process)
             task_function = register_descriptor_process;
         } else if (IS_METHOD("get_receive_address")) {
             task_function = get_receive_address_process;
+        } else if (IS_METHOD("get_evm_address")) {
+            task_function = get_evm_address_process;
         } else if (IS_METHOD("get_identity_pubkey")) {
             task_function = get_identity_pubkey_process;
         } else if (IS_METHOD("get_identity_shared_key")) {
@@ -584,6 +594,8 @@ static void dispatch_message(jade_process_t* process)
             task_function = sign_message_process;
         } else if (IS_METHOD("sign_psbt")) {
             task_function = sign_psbt_process;
+        } else if (IS_METHOD("sign_evm_tx")) {
+            task_function = sign_evm_tx_process;
         } else if (IS_METHOD("sign_tx")) {
             task_function = sign_tx_process;
         } else if (IS_METHOD("sign_liquid_tx")) {
@@ -2143,6 +2155,7 @@ static void handle_settings(const bool startup_menu)
 #ifdef CONFIG_IDF_TARGET_ESP32S3
         case BTN_SETTINGS_USBSTORAGE_EXIT:
 #endif
+        case BTN_SETTINGS_LOCKED_MORE_EXIT:
             // Change to base 'Settings' menu
             act = create_settings_menu(startup_menu);
             break;
@@ -2150,6 +2163,128 @@ static void handle_settings(const bool startup_menu)
             // Change to 'Wallet' menu
             act = make_wallet_settings_activity();
             break;
+        case BTN_SETTINGS_AUTH_UNLOCK:
+            handle_qr_auth(false);
+            done = true;
+            break;
+        case BTN_SETTINGS_LOCKED_MORE:
+            act = make_locked_more_activity();
+            break;
+        case BTN_SETTINGS_EVM:
+            // Change to 'EVM' menu
+            act = make_evm_settings_activity();
+            break;
+        case BTN_SETTINGS_EVM_RECEIVE:
+        {
+            if (!keychain_get()) {
+                const char* message[] = { "Unlock PIN antes", "de usar EVM" };
+                await_error_activity(message, 2);
+                act = make_evm_settings_activity();
+                break;
+            }
+            size_t account = 0, change = 0, pointer = 0;
+
+            gui_view_node_t* account_item = NULL;
+            gui_view_node_t* change_item = NULL;
+            gui_view_node_t* index_item = NULL;
+            gui_activity_t* const act_options
+                = make_evm_receive_options_activity(&account_item, &change_item, &index_item);
+
+            char buf[12];
+            int rc = snprintf(buf, sizeof(buf), "%u", (unsigned)account);
+            JADE_ASSERT(rc > 0 && rc < sizeof(buf));
+            update_menu_item(account_item, "Account Index", buf);
+
+            rc = snprintf(buf, sizeof(buf), "%u", (unsigned)change);
+            JADE_ASSERT(rc > 0 && rc < sizeof(buf));
+            update_menu_item(change_item, "Change", buf);
+
+            rc = snprintf(buf, sizeof(buf), "%u", (unsigned)pointer);
+            JADE_ASSERT(rc > 0 && rc < sizeof(buf));
+            update_menu_item(index_item, "Pointer", buf);
+
+            pin_insert_t pin_insert = { .initial_state = ZERO, .pin_digits_shown = true };
+            make_pin_insert_activity(&pin_insert, "Enter Value", "Use wheel to set digits");
+            JADE_ASSERT(pin_insert.activity);
+
+            gui_set_current_activity(act_options);
+            while (true) {
+                const int32_t ev = gui_activity_wait_button(act_options, BTN_EVM_OPTIONS_CONTINUE);
+                if (ev == BTN_EVM_OPTIONS_ACCOUNT || ev == BTN_EVM_OPTIONS_CHANGE || ev == BTN_EVM_OPTIONS_INDEX) {
+                    reset_pin(&pin_insert, ev == BTN_EVM_OPTIONS_ACCOUNT ? "Account Index"
+                            : ev == BTN_EVM_OPTIONS_CHANGE    ? "Change"
+                                                            : "Pointer");
+                    gui_set_current_activity(pin_insert.activity);
+                    if (!run_pin_entry_loop(&pin_insert)) {
+                        gui_set_current_activity(act_options);
+                        continue;
+                    }
+                    const uint32_t val = (uint32_t)get_pin_as_number(&pin_insert);
+                    rc = snprintf(buf, sizeof(buf), "%u", (unsigned)val);
+                    JADE_ASSERT(rc > 0 && rc < sizeof(buf));
+                    if (ev == BTN_EVM_OPTIONS_ACCOUNT) {
+                        account = val;
+                        update_menu_item(account_item, "Account Index", buf);
+                    } else if (ev == BTN_EVM_OPTIONS_CHANGE) {
+                        change = val;
+                        update_menu_item(change_item, "Change", buf);
+                    } else {
+                        pointer = val;
+                        update_menu_item(index_item, "Pointer", buf);
+                    }
+                    gui_set_current_activity(act_options);
+                } else if (ev == BTN_EVM_OPTIONS_EXIT) {
+                    act = make_evm_settings_activity();
+                    break;
+                } else if (ev == BTN_EVM_OPTIONS_CONTINUE) {
+                    uint32_t path[5] = {
+                        BIP32_INITIAL_HARDENED_CHILD + 44,
+                        BIP32_INITIAL_HARDENED_CHILD + 60,
+                        BIP32_INITIAL_HARDENED_CHILD + (uint32_t)account,
+                        (uint32_t)change,
+                        (uint32_t)pointer,
+                    };
+                    char address[64];
+                    if (wallet_get_evm_address(path, 5, address, sizeof(address))) {
+                        const bool default_selection = false;
+                        show_confirm_address_with_qr_activity(address, default_selection);
+                    } else {
+                        const char* message[] = { "Failed to derive EVM address" };
+                        await_error_activity(message, 1);
+                    }
+                    break;
+                }
+            }
+            break;
+        }
+        case BTN_SETTINGS_EVM_SIGN:
+        {
+            const char* message[] = { "Sign (EVM) via", "companion app", "RPC 'sign_evm_tx'" };
+            await_message_activity(message, 3);
+            break;
+        }
+        case BTN_SETTINGS_EVM_METAMASK_QR:
+        {
+            if (!keychain_get()) {
+                const char* message[] = { "Unlock PIN antes", "de exportar HDKey" };
+                await_error_activity(message, 2);
+                act = make_evm_settings_activity();
+                break;
+            }
+            uint16_t account_index = 0;
+            pin_insert_t pin_insert = { .initial_state = ZERO, .pin_digits_shown = true };
+            make_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
+            JADE_ASSERT(pin_insert.activity);
+
+            gui_set_current_activity(pin_insert.activity);
+            if (run_pin_entry_loop(&pin_insert)) {
+                const uint32_t new_index = (uint32_t)get_pin_as_number(&pin_insert);
+                account_index = (new_index <= 65535) ? (uint16_t)new_index : 0;
+            }
+
+            display_evm_hdkey_qr(account_index);
+            break;
+        }
 
         case BTN_SETTINGS_DEVICE:
         case BTN_SETTINGS_INFO_EXIT:
@@ -2285,6 +2420,11 @@ static void handle_settings(const bool startup_menu)
             break;
 
         case BTN_SETTINGS_XPUB_EXPORT:
+            if (!keychain_get()) {
+                const char* message[] = { "Unlock PIN antes", "de exportar Xpub" };
+                await_error_activity(message, 2);
+                break;
+            }
             display_xpub_qr();
             break;
 

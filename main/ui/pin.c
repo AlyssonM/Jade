@@ -143,6 +143,7 @@ void make_pin_insert_activity(pin_insert_t* pin_insert, const char* title, const
         update_digit_node(pin_insert, i);
     }
 
+
     gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_PIN_DIGIT_UP, pin_digit_button_handler,
         pin_insert);
     gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_PIN_DIGIT_DOWN, pin_digit_button_handler,
@@ -172,6 +173,7 @@ static void pin_digit_button_handler(void* handler_arg, esp_event_base_t base, i
         break;
     }
 }
+
 
 static bool next_selected_digit(pin_insert_t* pin_insert)
 {

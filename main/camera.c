@@ -1,5 +1,6 @@
 #ifndef AMALGAMATED_BUILD
 #include <esp_camera.h>
+#include <esp_log.h>
 #include <freertos/idf_additions.h>
 
 #include "button_events.h"
@@ -291,6 +292,8 @@ static void jade_camera_init(void)
 
     JADE_LOGI("The camera in use is: %s (%u)", camera_info->name, camera_info->model);
 
+    // Default logging level for cam_hal
+
     // GC0308 appears to need image flipping on both axes
     if (camera_info->model == CAMERA_GC0308) {
         JADE_ASSERT(camera_sensor->set_hmirror);
@@ -324,6 +327,9 @@ static void jade_camera_stop(void)
 {
     esp_camera_deinit();
     power_camera_off();
+#ifdef ESP_PLATFORM
+    // Restore default logging level for cam_hal
+#endif
 #if defined(CONFIG_DISPLAY_TOUCHSCREEN)
     touchscreen_deinit();
     touchscreen_init();
@@ -443,7 +449,7 @@ static void jade_camera_task(void* data)
 
         // If we have a gui, update a subset of frames on screen and check for button events
         if (camera_config->show_ui) {
-            const bool do_ui_update = ((frame_counter % 2) == 0);
+        const bool do_ui_update = ((frame_counter % 2) == 0);
 
             if (do_ui_update) {
                 // Copy from camera output to screen image
