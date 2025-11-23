@@ -694,12 +694,12 @@ static void offer_jade_reset(void)
     JADE_ASSERT(ret > 0 && ret < sizeof(confirm_msg));
 
     pin_insert_t pin_insert = { .initial_state = RANDOM, .pin_digits_shown = true };
-    make_pin_insert_activity(&pin_insert, "Reset Jade", confirm_msg);
+    make_keypad_pin_insert_activity(&pin_insert, "Reset Jade", confirm_msg);
     JADE_ASSERT(pin_insert.activity);
     JADE_STATIC_ASSERT(sizeof(num) == sizeof(pin_insert.pin));
 
     gui_set_current_activity(pin_insert.activity);
-    if (!run_pin_entry_loop(&pin_insert)) {
+    if (!run_keypad_pin_entry_loop(&pin_insert)) {
         // User abandoned pin entry - continue to boot screen
         JADE_LOGI("User confirmation abandoned, not wiping data.");
         return;
@@ -1251,14 +1251,14 @@ static void set_wallet_erase_pin(void)
 
     // Ask user to enter a wallet-erase pin
     pin_insert_t pin_insert = { .initial_state = RANDOM, .pin_digits_shown = false };
-    make_pin_insert_activity(&pin_insert, "Wallet-Erase PIN", "Different from main PIN");
+    make_keypad_pin_insert_activity(&pin_insert, "Wallet-Erase PIN", "Different from main PIN");
     JADE_ASSERT(pin_insert.activity);
 
     while (true) {
         reset_pin(&pin_insert, "Wallet-Erase PIN");
         gui_set_current_activity(pin_insert.activity);
 
-        if (!run_pin_entry_loop(&pin_insert)) {
+        if (!run_keypad_pin_entry_loop(&pin_insert)) {
             // User abandoned pin entry
             JADE_LOGI("User abandoned setting wallet erase PIN");
             break;
@@ -1270,7 +1270,7 @@ static void set_wallet_erase_pin(void)
         reset_pin(&pin_insert, "Confirm Erase PIN");
 
         // Ask user to re-enter PIN
-        if (!run_pin_entry_loop(&pin_insert)) {
+        if (!run_keypad_pin_entry_loop(&pin_insert)) {
             // User abandoned second input - back to first ...
             continue;
         }
@@ -2204,7 +2204,7 @@ static void handle_settings(const bool startup_menu)
             update_menu_item(index_item, "Pointer", buf);
 
             pin_insert_t pin_insert = { .initial_state = ZERO, .pin_digits_shown = true };
-            make_pin_insert_activity(&pin_insert, "Enter Value", "Use wheel to set digits");
+            make_keypad_pin_insert_activity(&pin_insert, "Enter Value", NULL);
             JADE_ASSERT(pin_insert.activity);
 
             gui_set_current_activity(act_options);
@@ -2215,7 +2215,7 @@ static void handle_settings(const bool startup_menu)
                             : ev == BTN_EVM_OPTIONS_CHANGE    ? "Change"
                                                             : "Pointer");
                     gui_set_current_activity(pin_insert.activity);
-                    if (!run_pin_entry_loop(&pin_insert)) {
+                    if (!run_keypad_pin_entry_loop(&pin_insert)) {
                         gui_set_current_activity(act_options);
                         continue;
                     }
@@ -2273,11 +2273,11 @@ static void handle_settings(const bool startup_menu)
             }
             uint16_t account_index = 0;
             pin_insert_t pin_insert = { .initial_state = ZERO, .pin_digits_shown = true };
-            make_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
+            make_keypad_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
             JADE_ASSERT(pin_insert.activity);
 
             gui_set_current_activity(pin_insert.activity);
-            if (run_pin_entry_loop(&pin_insert)) {
+            if (run_keypad_pin_entry_loop(&pin_insert)) {
                 const uint32_t new_index = (uint32_t)get_pin_as_number(&pin_insert);
                 account_index = (new_index <= 65535) ? (uint16_t)new_index : 0;
             }

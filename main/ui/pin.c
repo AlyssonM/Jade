@@ -77,80 +77,172 @@ static void update_digit_node(pin_insert_t* pin_insert, uint8_t i)
     gui_repaint(pin_insert->pin_digit_nodes[i].fill_node);
 }
 
-void make_pin_insert_activity(pin_insert_t* pin_insert, const char* title, const char* message)
+static void keypad_pin_button_handler(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data)
+{
+    pin_insert_t* pin_insert = (pin_insert_t*)handler_arg;
+    if (!pin_insert) {
+        return;
+    }
+
+    if (id > BTN_KEYBOARD_ASCII_OFFSET) {
+        const size_t digit = id - BTN_KEYBOARD_ASCII_OFFSET;
+        if (pin_insert->selected_digit < PIN_SIZE) {
+            pin_insert->pin[pin_insert->selected_digit++] = digit;
+        }
+    } else if (id == BTN_KEYBOARD_BACKSPACE) {
+        if (pin_insert->selected_digit > 0) {
+            pin_insert->selected_digit--;
+        } else {
+            // Pressed backspace on empty pin - signal abandon
+            esp_event_post(GUI_EVENT, BTN_BACK, NULL, 0, 50 / portTICK_PERIOD_MS);
+        }
+    } else if (id == BTN_KEYBOARD_ENTER) {
+        // Handle enter - post event to complete pin entry
+        esp_event_post(GUI_EVENT, GUI_FRONT_CLICK_EVENT, NULL, 0, 50 / portTICK_PERIOD_MS);
+    }
+
+    char pin_str[PIN_SIZE + 1];
+    for (size_t i = 0; i < pin_insert->selected_digit; ++i) {
+        pin_str[i] = '*';
+    }
+    pin_str[pin_insert->selected_digit] = '\0';
+    gui_update_text(pin_insert->pin_text_node, pin_str);
+}
+
+void make_keypad_pin_insert_activity(pin_insert_t* pin_insert, const char* title, const char* message)
 {
     JADE_ASSERT(pin_insert);
+    JADE_ASSERT(title);
 
     pin_insert->activity = gui_make_activity();
     gui_view_node_t* parent = add_title_bar(pin_insert->activity, title, NULL, 0, &pin_insert->title);
     gui_view_node_t* node;
 
     gui_view_node_t* vsplit;
+
     if (message) {
-        gui_make_vsplit(&vsplit, GUI_SPLIT_RELATIVE, 2, 25, 75);
+        gui_make_vsplit(&vsplit, GUI_SPLIT_RELATIVE, 3, 20, 15, 65); // msg, pin, keypad
+        gui_set_parent(vsplit, parent);
+
         gui_make_text(&node, message, TFT_WHITE);
         gui_set_align(node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+        gui_set_parent(node, vsplit);
     } else {
-        gui_make_vsplit(&vsplit, GUI_SPLIT_RELATIVE, 3, 10, 75, 15);
-        gui_make_fill(&node, TFT_BLACK, FILL_PLAIN, NULL);
-    }
-    gui_set_parent(vsplit, parent);
-    gui_set_parent(node, vsplit);
-
-    const size_t toppad = CONFIG_DISPLAY_HEIGHT > 200 ? 20 : CONFIG_DISPLAY_HEIGHT > 160 ? 12 : 4;
-    const size_t lrpad = (CONFIG_DISPLAY_WIDTH - (6 * 35)) / 2;
-    gui_view_node_t* hsplit;
-    gui_make_hsplit(&hsplit, GUI_SPLIT_ABSOLUTE, 6, 35, 35, 35, 35, 35, 35);
-    gui_set_margins(hsplit, GUI_MARGIN_ALL_DIFFERENT, toppad, lrpad, toppad + 8, lrpad);
-    gui_set_parent(hsplit, vsplit);
-
-    reinitialise_current_pin_digit(pin_insert);
-
-    for (size_t i = 0; i < PIN_SIZE; ++i) {
-        pin_insert->pin[i] = 0xFF;
-        pin_insert->digit_status[i] = i == 0 ? SELECTED : EMPTY;
-
-        gui_make_fill(&node, TFT_BLACK, FILL_PLAIN, hsplit);
-        pin_insert->pin_digit_nodes[i].fill_node = node;
-
-        gui_make_vsplit(&vsplit, GUI_SPLIT_RELATIVE, 3, 25, 50, 25);
-        gui_set_parent(vsplit, node);
-        // no need to store the vsplit
-
-        gui_view_node_t* btn;
-        gui_make_button(&btn, TFT_BLACK, TFT_BLACK, BTN_PIN_DIGIT_UP, NULL);
-        gui_set_parent(btn, vsplit);
-        gui_make_text_font(&node, "K", TFT_WHITE, JADE_SYMBOLS_16x16_FONT);
-        gui_set_align(node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
-        gui_set_parent(node, btn);
-        pin_insert->pin_digit_nodes[i].up_arrow_node = node;
-
-        gui_make_button(&btn, TFT_BLACK, TFT_BLACK, BTN_PIN_DIGIT_SELECT, NULL);
-        gui_set_parent(btn, vsplit);
-        gui_make_text_font(&node, "", TFT_WHITE, DEJAVU24_FONT);
-        gui_set_align(node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
-        gui_set_parent(node, btn);
-        gui_set_padding(node, GUI_MARGIN_ALL_DIFFERENT, 5, 0, 0, 0);
-        pin_insert->pin_digit_nodes[i].digit_node = node;
-
-        gui_make_button(&btn, TFT_BLACK, TFT_BLACK, BTN_PIN_DIGIT_DOWN, NULL);
-        gui_set_parent(btn, vsplit);
-        gui_make_text_font(&node, "L", TFT_WHITE, JADE_SYMBOLS_16x16_FONT);
-        gui_set_align(node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
-        gui_set_parent(node, btn);
-        pin_insert->pin_digit_nodes[i].down_arrow_node = node;
-
-        update_digit_node(pin_insert, i);
+        gui_make_vsplit(&vsplit, GUI_SPLIT_RELATIVE, 2, 20, 80); // pin, keypad
+        gui_set_parent(vsplit, parent);
     }
 
+    gui_make_text_font(&pin_insert->pin_text_node, "", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(pin_insert->pin_text_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(pin_insert->pin_text_node, vsplit);
 
-    gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_PIN_DIGIT_UP, pin_digit_button_handler,
-        pin_insert);
-    gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_PIN_DIGIT_DOWN, pin_digit_button_handler,
-        pin_insert);
-    gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_PIN_DIGIT_SELECT, pin_digit_button_handler,
-        pin_insert);
+    gui_view_node_t* keypad_grid;
+    gui_make_vsplit(&keypad_grid, GUI_SPLIT_RELATIVE, 4, 25, 25, 25, 25);
+    gui_set_parent(keypad_grid, vsplit);
+
+    gui_view_node_t* btn;
+    gui_view_node_t* label_node;
+
+    // Row 1: 1, 2, 3
+    gui_view_node_t* row1;
+    gui_make_hsplit(&row1, GUI_SPLIT_RELATIVE, 3, 33, 34, 33);
+    gui_set_parent(row1, keypad_grid);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ASCII_OFFSET + 1, NULL);
+    gui_set_parent(btn, row1);
+    gui_make_text_font(&label_node, "1", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ASCII_OFFSET + 2, NULL);
+    gui_set_parent(btn, row1);
+    gui_make_text_font(&label_node, "2", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ASCII_OFFSET + 3, NULL);
+    gui_set_parent(btn, row1);
+    gui_make_text_font(&label_node, "3", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    // Row 2: 4, 5, 6
+    gui_view_node_t* row2;
+    gui_make_hsplit(&row2, GUI_SPLIT_RELATIVE, 3, 33, 34, 33);
+    gui_set_parent(row2, keypad_grid);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ASCII_OFFSET + 4, NULL);
+    gui_set_parent(btn, row2);
+    gui_make_text_font(&label_node, "4", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ASCII_OFFSET + 5, NULL);
+    gui_set_parent(btn, row2);
+    gui_make_text_font(&label_node, "5", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ASCII_OFFSET + 6, NULL);
+    gui_set_parent(btn, row2);
+    gui_make_text_font(&label_node, "6", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    // Row 3: 7, 8, 9
+    gui_view_node_t* row3;
+    gui_make_hsplit(&row3, GUI_SPLIT_RELATIVE, 3, 33, 34, 33);
+    gui_set_parent(row3, keypad_grid);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ASCII_OFFSET + 7, NULL);
+    gui_set_parent(btn, row3);
+    gui_make_text_font(&label_node, "7", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ASCII_OFFSET + 8, NULL);
+    gui_set_parent(btn, row3);
+    gui_make_text_font(&label_node, "8", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ASCII_OFFSET + 9, NULL);
+    gui_set_parent(btn, row3);
+    gui_make_text_font(&label_node, "9", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    // Row 4: confirm, 0, backspace
+    gui_view_node_t* row4;
+    gui_make_hsplit(&row4, GUI_SPLIT_RELATIVE, 3, 33, 34, 33);
+    gui_set_parent(row4, keypad_grid);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ENTER, NULL);
+    gui_set_parent(btn, row4);
+    gui_make_text_font(&label_node, "S", TFT_WHITE, VARIOUS_SYMBOLS_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_ASCII_OFFSET + 0, NULL);
+    gui_set_parent(btn, row4);
+    gui_make_text_font(&label_node, "0", TFT_WHITE, DEJAVU24_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    gui_make_button(&btn, TFT_BLACK, gui_get_highlight_color(), BTN_KEYBOARD_BACKSPACE, NULL);
+    gui_set_parent(btn, row4);
+    gui_make_text_font(&label_node, "|", TFT_WHITE, DEFAULT_FONT);
+    gui_set_align(label_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+    gui_set_parent(label_node, btn);
+
+    gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_KEYBOARD_ENTER, keypad_pin_button_handler, pin_insert);
+    gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_KEYBOARD_BACKSPACE, keypad_pin_button_handler, pin_insert);
+    for (size_t i = 0; i <= 9; ++i) {
+        gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_KEYBOARD_ASCII_OFFSET + i, keypad_pin_button_handler, pin_insert);
+    }
 }
+
+
 
 static void pin_digit_button_handler(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data)
 {
@@ -231,7 +323,7 @@ static bool prev_selected_digit(pin_insert_t* pin_insert)
 
 // Returns true if pin entry completes and pin_insert->pin is valid,
 // and false if pin entry abandoned and pin_insert->pin is not to be used.
-bool run_pin_entry_loop(pin_insert_t* pin_insert)
+bool run_keypad_pin_entry_loop(pin_insert_t* pin_insert)
 {
     JADE_ASSERT(pin_insert);
     JADE_ASSERT(pin_insert->activity);
@@ -241,32 +333,17 @@ bool run_pin_entry_loop(pin_insert_t* pin_insert)
         // wait for a GUI event
         gui_activity_wait_event(pin_insert->activity, GUI_EVENT, ESP_EVENT_ANY_ID, NULL, &ev_id, NULL, 0);
 
-        switch (ev_id) {
-        case GUI_WHEEL_LEFT_EVENT:
-            pin_insert->current_selected_value
-                = (pin_insert->current_selected_value + NUM_PIN_CHARS - 1) % NUM_PIN_CHARS;
-            update_digit_node(pin_insert, pin_insert->selected_digit);
-            break;
-        case GUI_WHEEL_RIGHT_EVENT:
-            pin_insert->current_selected_value = (pin_insert->current_selected_value + 1) % NUM_PIN_CHARS;
-            update_digit_node(pin_insert, pin_insert->selected_digit);
-            break;
-
-        default:
-            if (ev_id == gui_get_click_event()) {
-                if (get_pin_value(pin_insert->current_selected_value) == CHAR_BACKSPACE) {
-                    if (!prev_selected_digit(pin_insert)) {
-                        // Returns false when click 'backspace' on first digit (cannot move to previous)
-                        return false; // pin entry abandoned
-                    }
-                } else if (!next_selected_digit(pin_insert)) {
-                    // Returns false when click number on last digit (cannot move to next)
-                    return true; // pin entry complete
-                }
-            }
+        if (ev_id == gui_get_click_event()) {
+            // Enter pressed
+            return true; // pin entry complete
+        } else if (ev_id == BTN_BACK) {
+            // Backspace on empty pin
+            return false; // pin entry abandoned
         }
     }
 }
+
+
 
 void reset_pin(pin_insert_t* pin_insert, const char* title)
 {

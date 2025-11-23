@@ -289,7 +289,7 @@ static bool handle_xpub_options(uint32_t* qr_flags)
     gui_update_text(wallet_textbox, xpub_wallettype_desc_from_flags(*qr_flags));
 
     pin_insert_t pin_insert = { .initial_state = ZERO, .pin_digits_shown = true };
-    make_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
+    make_keypad_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
     JADE_ASSERT(pin_insert.activity);
 
     const uint32_t initial_flags = *qr_flags;
@@ -333,7 +333,7 @@ static bool handle_xpub_options(uint32_t* qr_flags)
             while (true) {
                 reset_pin(&pin_insert, NULL);
                 gui_set_current_activity(pin_insert.activity);
-                if (!run_pin_entry_loop(&pin_insert)) {
+                if (!run_keypad_pin_entry_loop(&pin_insert)) {
                     // User abandoned index entry
                     break;
                 }
@@ -653,12 +653,12 @@ static bool handle_address_options(const bool show_account, uint16_t* account_in
 
             if (ev_id == BTN_SCAN_ADDRESS_OPTIONS_ACCOUNT && show_account) {
                 pin_insert_t pin_insert = { .initial_state = ZERO, .pin_digits_shown = true };
-                make_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
+                make_keypad_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
                 JADE_ASSERT(pin_insert.activity);
 
                 while (true) {
                     gui_set_current_activity(pin_insert.activity);
-                    if (!run_pin_entry_loop(&pin_insert)) {
+                    if (!run_keypad_pin_entry_loop(&pin_insert)) {
                         // User abandoned index entry
                         break;
                     }
