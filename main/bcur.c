@@ -839,6 +839,8 @@ bool bcur_parse_eth_sign_request(const uint8_t* cbor, size_t cbor_len, uint8_t* 
 
     if (chain_id) *chain_id = 1;
 
+    JADE_LOGI("ETH-SIGN-REQUEST parse start cbor_len=%u", (unsigned)cbor_len);
+
     CborParser parser;
     CborValue root;
     CborError cberr = cbor_parser_init(cbor, cbor_len, CborValidateCompleteData, &parser, &root);
@@ -857,23 +859,30 @@ bool bcur_parse_eth_sign_request(const uint8_t* cbor, size_t cbor_len, uint8_t* 
 
         if (cbor_value_is_integer(&it)) {
             cberr = cbor_value_get_int(&it, &key);
-            if (cberr != CborNoError) return false;
+            if (cberr != CborNoError) break;
         } else if (cbor_value_is_text_string(&it)) {
             rpc_get_raw_string_ptr(&it, &skey, &skey_len);
-            if (!skey || !skey_len) return false;
+            if (!skey || !skey_len) break;
         } else {
-            return false;
+            break;
         }
 
         cberr = cbor_value_advance(&it);
-        if (cberr != CborNoError) return false;
+        if (cberr != CborNoError) break;
 
-        const bool is_req_id_key = (key == 6) || (skey && (!strncasecmp(skey, "requestid", skey_len)
-            || !strncasecmp(skey, "request-id", skey_len)));
-        const bool is_sign_data_key = (key == 1) || (skey && (!strncasecmp(skey, "data", skey_len)
-            || !strncasecmp(skey, "sign_data", skey_len)));
-        const bool is_chain_id_key = (chain_id && (key == 5 || (skey && (!strncasecmp(skey, "chainid", skey_len)
-            || !strncasecmp(skey, "chain-id", skey_len)))));
+        const bool is_req_id_key = (key == 1 || key == 4 || key == 6)
+            || (skey && (!strncasecmp(skey, "requestid", skey_len)
+                || !strncasecmp(skey, "request-id", skey_len)));
+        const bool is_sign_data_key = (key == 2)
+            || (skey && (!strncasecmp(skey, "data", skey_len)
+                || !strncasecmp(skey, "sign_data", skey_len)
+                || !strncasecmp(skey, "sign-data", skey_len)));
+        const bool is_chain_id_key = (chain_id && (key == 3
+            || (skey && (!strncasecmp(skey, "chainid", skey_len)
+                || !strncasecmp(skey, "chain-id", skey_len)))));
+
+        JADE_LOGI("ETH-SIGN-REQUEST key %d/%.*s type=%d", key, (int)skey_len, skey ? skey : "",
+            (int)cbor_value_get_type(&it));
 
         if (is_req_id_key) {
             if (cbor_value_is_tag(&it)) {
@@ -881,7 +890,7 @@ bool bcur_parse_eth_sign_request(const uint8_t* cbor, size_t cbor_len, uint8_t* 
                 cbor_value_get_tag(&it, &tag);
                 if (tag == 37) {
                     cberr = cbor_value_advance(&it);
-                    if (cberr != CborNoError) return false;
+                    if (cberr != CborNoError) break;
                 }
             }
             const uint8_t* bytes = NULL;
@@ -890,31 +899,81 @@ bool bcur_parse_eth_sign_request(const uint8_t* cbor, size_t cbor_len, uint8_t* 
             if (bytes && len && request_id && request_id_len) {
                 const size_t copy_len = len < request_id_len ? len : request_id_len;
                 memcpy(request_id, bytes, copy_len);
+                JADE_LOGI("ETH-SIGN-REQUEST request-id len %u", (unsigned)len);
             }
         } else if (is_sign_data_key) {
+            if (cbor_value_is_tag(&it)) {
+                CborTag tag;
+                cbor_value_get_tag(&it, &tag);
+                JADE_LOGI("ETH-SIGN-REQUEST sign-data tag %lu", (unsigned long)tag);
+                cberr = cbor_value_advance(&it);
+                if (cberr != CborNoError) break;
+            }
             const uint8_t* bytes = NULL;
             size_t len = 0;
             rpc_get_raw_bytes_ptr(&it, &bytes, &len);
             if (bytes && len) {
                 *sign_data = (uint8_t*)bytes;
                 *sign_data_len = len;
+                JADE_LOGI("ETH-SIGN-REQUEST sign-data len %u", (unsigned)len);
+            } else if (cbor_value_is_text_string(&it)) {
+                const char* s = NULL;
+                size_t s_len = 0;
+                rpc_get_raw_string_ptr(&it, &s, &s_len);
+                if (s && s_len) {
+                    *sign_data = (uint8_t*)s;
+                    *sign_data_len = s_len;
+                    JADE_LOGI("ETH-SIGN-REQUEST sign-data text len %u", (unsigned)s_len);
+                }
+            } else {
+                JADE_LOGW("ETH-SIGN-REQUEST sign-data unexpected type=%d", (int)cbor_value_get_type(&it));
             }
         } else if (is_chain_id_key) {
             if (cbor_value_is_unsigned_integer(&it)) {
                 uint64_t v = 0;
                 cbor_value_get_uint64(&it, &v);
                 if (v > 0) *chain_id = v;
+                JADE_LOGI("ETH-SIGN-REQUEST chain-id uint %u", (unsigned)(chain_id ? *chain_id : 0));
             } else if (cbor_value_is_integer(&it)) {
                 int64_t v = 0;
                 cbor_value_get_int64(&it, &v);
                 if (v > 0) *chain_id = (uint64_t)v;
+                JADE_LOGI("ETH-SIGN-REQUEST chain-id int %u", (unsigned)(chain_id ? *chain_id : 0));
+            } else if (cbor_value_is_text_string(&it)) {
+                const char* s = NULL;
+                size_t s_len = 0;
+                rpc_get_raw_string_ptr(&it, &s, &s_len);
+                if (s && s_len) {
+                    uint64_t v = 0;
+                    if (s_len >= 3 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+                        for (size_t i = 2; i < s_len; ++i) {
+                            char c = s[i];
+                            v <<= 4;
+                            if (c >= '0' && c <= '9') v |= (uint64_t)(c - '0');
+                            else if (c >= 'a' && c <= 'f') v |= (uint64_t)(10 + c - 'a');
+                            else if (c >= 'A' && c <= 'F') v |= (uint64_t)(10 + c - 'A');
+                            else { v = 0; break; }
+                        }
+                    } else {
+                        for (size_t i = 0; i < s_len; ++i) {
+                            char c = s[i];
+                            if (c < '0' || c > '9') { v = 0; break; }
+                            v = v * 10 + (uint64_t)(c - '0');
+                        }
+                    }
+                    if (v > 0) *chain_id = v;
+                    JADE_LOGI("ETH-SIGN-REQUEST chain-id str %u", (unsigned)(chain_id ? *chain_id : 0));
+                }
             }
         }
 
         cberr = cbor_value_advance(&it);
-        if (cberr != CborNoError) return false;
+        if (cberr != CborNoError) break;
     }
-    return *sign_data && *sign_data_len;
+    const bool ok = *sign_data && *sign_data_len;
+    JADE_LOGI("ETH-SIGN-REQUEST parse end ok=%u sign_data_len=%u chain_id=%u", (unsigned)ok,
+        (unsigned)(*sign_data_len), (unsigned)(chain_id ? *chain_id : 0));
+    return ok;
 }
 
 #ifdef CONFIG_DEBUG_MODE

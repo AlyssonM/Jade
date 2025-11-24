@@ -39,8 +39,8 @@ void camera_set_debug_image(const uint8_t* data, const size_t len)
 #define CAMERA_MIN_TIMEOUT_SECS 300
 
 // Size of the image as provided by the camera
-#define CAMERA_IMAGE_RESOLUTION FRAMESIZE_QVGA
-#if (CAMERA_IMAGE_WIDTH != 320) || (CAMERA_IMAGE_HEIGHT != 240)
+#define CAMERA_IMAGE_RESOLUTION FRAMESIZE_VGA
+#if (CAMERA_IMAGE_WIDTH != 640) || (CAMERA_IMAGE_HEIGHT != 480)
 #error CAMERA_IMAGE_WIDTH/HEIGHT inconsistent with CAMERA_IMAGE_RESOLUTION!
 #endif
 
@@ -270,7 +270,7 @@ static void jade_camera_init(void)
         .pixel_format = PIXFORMAT_GRAYSCALE,
         .frame_size = CAMERA_IMAGE_RESOLUTION,
 
-        .fb_count = 2,
+        .fb_count = 1,
         .fb_location = CAMERA_FB_IN_PSRAM,
         .grab_mode = CAMERA_GRAB_LATEST,
 
@@ -314,6 +314,29 @@ static void jade_camera_init(void)
             JADE_LOGE("Failed to set camera vflip, returned: %d", vret);
         }
     }
+
+    // Improve sharpness and reduce blur/noise for QR decoding
+    // if (camera_sensor->set_sharpness) {
+    //     camera_sensor->set_sharpness(camera_sensor, 2);
+    // }
+    // if (camera_sensor->set_denoise) {
+    //     camera_sensor->set_denoise(camera_sensor, 1);
+    // }
+    // if (camera_sensor->set_lenc) {
+    //     camera_sensor->set_lenc(camera_sensor, 1);
+    // }
+    // if (camera_sensor->set_dcw) {
+    //     camera_sensor->set_dcw(camera_sensor, 1);
+    // }
+    // if (camera_sensor->set_bpc) {
+    //     camera_sensor->set_bpc(camera_sensor, 1);
+    // }
+    // if (camera_sensor->set_wpc) {
+    //     camera_sensor->set_wpc(camera_sensor, 1);
+    // }
+    // if (camera_sensor->set_brightness) {
+    //     camera_sensor->set_brightness(camera_sensor, 1);
+    // }
 
 #if defined(CONFIG_DISPLAY_TOUCHSCREEN)
     touchscreen_deinit();

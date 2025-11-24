@@ -87,18 +87,24 @@ static void keypad_pin_button_handler(void* handler_arg, esp_event_base_t base, 
     if (id > BTN_KEYBOARD_ASCII_OFFSET) {
         const size_t digit = id - BTN_KEYBOARD_ASCII_OFFSET;
         if (pin_insert->selected_digit < PIN_SIZE) {
-            pin_insert->pin[pin_insert->selected_digit++] = digit;
+            pin_insert->pin[pin_insert->selected_digit] = digit;
+            pin_insert->digit_status[pin_insert->selected_digit] = SET;
+            pin_insert->selected_digit++;
         }
     } else if (id == BTN_KEYBOARD_BACKSPACE) {
         if (pin_insert->selected_digit > 0) {
             pin_insert->selected_digit--;
+            pin_insert->pin[pin_insert->selected_digit] = 0xFF;
+            pin_insert->digit_status[pin_insert->selected_digit] = EMPTY;
         } else {
             // Pressed backspace on empty pin - signal abandon
             esp_event_post(GUI_EVENT, BTN_BACK, NULL, 0, 50 / portTICK_PERIOD_MS);
         }
     } else if (id == BTN_KEYBOARD_ENTER) {
-        // Handle enter - post event to complete pin entry
-        esp_event_post(GUI_EVENT, GUI_FRONT_CLICK_EVENT, NULL, 0, 50 / portTICK_PERIOD_MS);
+        // Only complete when all digits entered
+        if (pin_insert->selected_digit == PIN_SIZE) {
+            esp_event_post(GUI_EVENT, GUI_FRONT_CLICK_EVENT, NULL, 0, 50 / portTICK_PERIOD_MS);
+        }
     }
 
     char pin_str[PIN_SIZE + 1];
@@ -240,6 +246,9 @@ void make_keypad_pin_insert_activity(pin_insert_t* pin_insert, const char* title
     for (size_t i = 0; i <= 9; ++i) {
         gui_activity_register_event(pin_insert->activity, GUI_BUTTON_EVENT, BTN_KEYBOARD_ASCII_OFFSET + i, keypad_pin_button_handler, pin_insert);
     }
+
+    // Initialise PIN state and display
+    reset_pin(pin_insert, NULL);
 }
 
 
@@ -334,8 +343,9 @@ bool run_keypad_pin_entry_loop(pin_insert_t* pin_insert)
         gui_activity_wait_event(pin_insert->activity, GUI_EVENT, ESP_EVENT_ANY_ID, NULL, &ev_id, NULL, 0);
 
         if (ev_id == gui_get_click_event()) {
-            // Enter pressed
-            return true; // pin entry complete
+            // Enter pressed - pin entry complete
+            JADE_ASSERT(pin_insert->selected_digit == PIN_SIZE);
+            return true;
         } else if (ev_id == BTN_BACK) {
             // Backspace on empty pin
             return false; // pin entry abandoned
@@ -357,8 +367,11 @@ void reset_pin(pin_insert_t* pin_insert, const char* title)
     // Mark all digits as unset
     for (size_t i = 0; i < PIN_SIZE; ++i) {
         pin_insert->pin[i] = 0xFF;
-        pin_insert->digit_status[i] = i == 0 ? SELECTED : EMPTY;
-        update_digit_node(pin_insert, i);
+        // In keypad mode we don't use per-digit nodes, so leave all EMPTY
+        pin_insert->digit_status[i] = EMPTY;
+        if (!pin_insert->pin_text_node) {
+            update_digit_node(pin_insert, i);
+        }
     }
 
     // Update title if passed
