@@ -27,6 +27,8 @@ static network_type_t network_type_restriction = NETWORK_TYPE_NONE;
 static bool has_encrypted_blob = false;
 static bool has_encrypted_blob_evm = false;
 static uint8_t keychain_userdata = 0;
+static uint8_t current_aeskey[AES_KEY_LEN_256];
+static bool current_aeskey_valid = false;
 static bool keychain_temporary = false;
 
 // If using a passphrase we may need to cache the mnemonic entropy
@@ -629,6 +631,8 @@ bool keychain_store(const uint8_t* aeskey, const size_t aeslen)
     keychain_clear_network_type_restriction();
     has_encrypted_blob = true;
 
+    memcpy(current_aeskey, aeskey, aeslen);
+    current_aeskey_valid = true;
     return true;
 }
 
@@ -695,6 +699,8 @@ bool keychain_load(const uint8_t* aeskey, const size_t aeslen)
     }
     SENSITIVE_POP(serialized);
 
+    memcpy(current_aeskey, aeskey, aeslen);
+    current_aeskey_valid = true;
     return true;
 }
 
@@ -754,6 +760,8 @@ bool keychain_reencrypt(
     }
     SENSITIVE_POP(serialized);
 
+    memcpy(current_aeskey, new_aeskey, new_aeslen);
+    current_aeskey_valid = true;
     return true;
 }
 
@@ -782,6 +790,28 @@ bool keychain_set_evm_from_mnemonic(const char* mnemonic, const char* passphrase
     }
     SENSITIVE_POP(&tmp);
     return ok;
+}
+
+bool keychain_store_evm_current_session(void)
+{
+    if (!current_aeskey_valid) return false;
+    if (!keychain_data) return false;
+    uint8_t serialized[BIP32_SERIALIZED_LEN];
+    JADE_WALLY_VERIFY(bip32_key_serialize(&keychain_data->evm_xpriv, BIP32_FLAG_KEY_PRIVATE, serialized, sizeof(serialized)));
+    const bool ok = keychain_encrypt_and_save_blob_evm(current_aeskey, sizeof(current_aeskey), serialized, sizeof(serialized));
+    if (ok) has_encrypted_blob_evm = true;
+    return ok;
+}
+
+bool keychain_current_aeskey_valid(void) { return current_aeskey_valid; }
+
+bool keychain_set_evm_from_current(void)
+{
+    if (!keychain_data) {
+        return false;
+    }
+    memcpy(&keychain_data->evm_xpriv, &keychain_data->xpriv, sizeof(struct ext_key));
+    return true;
 }
 
 bool keychain_has_pin(void) { return has_encrypted_blob; }

@@ -16,3 +16,4 @@ dist/
 jade_client.egg-info/
 docs/_build/
 .venv/
+out_frames/

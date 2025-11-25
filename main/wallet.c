@@ -1637,8 +1637,17 @@ bool wallet_sign_evm_hash(const uint8_t* hash32, const size_t hash_len, const ui
         return false;
     }
 
+    // libwally recoverable signatures are encoded as [header || r || s]
+    // For Ethereum typed transactions we need [r || s || v] with v = y-parity (0/1).
+    JADE_ASSERT(sig_len == 65);
+    const uint8_t header = sig_rec[0];
+    memmove(sig_rec, sig_rec + 1, 64); // shift r||s down to the start of the buffer
+    const uint8_t recid = (uint8_t)((header >= 27) ? ((header - 27) & 0x03) : (header & 0x03));
+    const uint8_t parity = recid & 0x01;
+    sig_rec[64] = parity;
+
     *written = sig_len;
-    *y_parity = sig_rec[64] & 0x01;
+    *y_parity = parity;
     return true;
 }
 #endif // AMALGAMATED_BUILD

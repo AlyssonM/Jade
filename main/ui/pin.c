@@ -77,6 +77,38 @@ static void update_digit_node(pin_insert_t* pin_insert, uint8_t i)
     gui_repaint(pin_insert->pin_digit_nodes[i].fill_node);
 }
 
+static void update_pin_text_display(pin_insert_t* pin_insert)
+{
+    if (!pin_insert || !pin_insert->pin_text_node) {
+        return;
+    }
+
+    char pin_str[(PIN_SIZE * 2) + 1];
+    size_t pos = 0;
+    for (size_t i = 0; i < pin_insert->selected_digit; ++i) {
+        if (pos > 0) {
+            pin_str[pos++] = ' ';
+        }
+        pin_str[pos++] = pin_insert->pin_digits_shown ? PIN_CHARS[pin_insert->pin[i]] : '*';
+    }
+    pin_str[pos] = '\0';
+    gui_update_text(pin_insert->pin_text_node, pin_str);
+}
+
+static bool keypad_backspace(pin_insert_t* pin_insert)
+{
+    JADE_ASSERT(pin_insert);
+
+    if (pin_insert->selected_digit == 0) {
+        return false;
+    }
+
+    pin_insert->selected_digit--;
+    pin_insert->pin[pin_insert->selected_digit] = 0xFF;
+    pin_insert->digit_status[pin_insert->selected_digit] = EMPTY;
+    return true;
+}
+
 static void keypad_pin_button_handler(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data)
 {
     pin_insert_t* pin_insert = (pin_insert_t*)handler_arg;
@@ -84,35 +116,32 @@ static void keypad_pin_button_handler(void* handler_arg, esp_event_base_t base, 
         return;
     }
 
+    bool updated = false;
     if (id > BTN_KEYBOARD_ASCII_OFFSET) {
         const size_t digit = id - BTN_KEYBOARD_ASCII_OFFSET;
         if (pin_insert->selected_digit < PIN_SIZE) {
             pin_insert->pin[pin_insert->selected_digit] = digit;
             pin_insert->digit_status[pin_insert->selected_digit] = SET;
             pin_insert->selected_digit++;
+            updated = true;
         }
     } else if (id == BTN_KEYBOARD_BACKSPACE) {
-        if (pin_insert->selected_digit > 0) {
-            pin_insert->selected_digit--;
-            pin_insert->pin[pin_insert->selected_digit] = 0xFF;
-            pin_insert->digit_status[pin_insert->selected_digit] = EMPTY;
-        } else {
+        if (!keypad_backspace(pin_insert)) {
             // Pressed backspace on empty pin - signal abandon
             esp_event_post(GUI_EVENT, BTN_BACK, NULL, 0, 50 / portTICK_PERIOD_MS);
+            return;
         }
+        updated = true;
     } else if (id == BTN_KEYBOARD_ENTER) {
-        // Only complete when all digits entered
-        if (pin_insert->selected_digit == PIN_SIZE) {
+        if ((pin_insert->pin_digits_shown && pin_insert->selected_digit > 0)
+            || (!pin_insert->pin_digits_shown && pin_insert->selected_digit == PIN_SIZE)) {
             esp_event_post(GUI_EVENT, GUI_FRONT_CLICK_EVENT, NULL, 0, 50 / portTICK_PERIOD_MS);
         }
     }
 
-    char pin_str[PIN_SIZE + 1];
-    for (size_t i = 0; i < pin_insert->selected_digit; ++i) {
-        pin_str[i] = '*';
+    if (updated) {
+        update_pin_text_display(pin_insert);
     }
-    pin_str[pin_insert->selected_digit] = '\0';
-    gui_update_text(pin_insert->pin_text_node, pin_str);
 }
 
 void make_keypad_pin_insert_activity(pin_insert_t* pin_insert, const char* title, const char* message)
@@ -343,12 +372,18 @@ bool run_keypad_pin_entry_loop(pin_insert_t* pin_insert)
         gui_activity_wait_event(pin_insert->activity, GUI_EVENT, ESP_EVENT_ANY_ID, NULL, &ev_id, NULL, 0);
 
         if (ev_id == gui_get_click_event()) {
-            // Enter pressed - pin entry complete
-            JADE_ASSERT(pin_insert->selected_digit == PIN_SIZE);
-            return true;
+            if (pin_insert->pin_digits_shown) {
+                if (pin_insert->selected_digit > 0) return true;
+            } else {
+                JADE_ASSERT(pin_insert->selected_digit == PIN_SIZE);
+                return true;
+            }
         } else if (ev_id == BTN_BACK) {
-            // Backspace on empty pin
-            return false; // pin entry abandoned
+            if (!keypad_backspace(pin_insert)) {
+                // No digits to delete - treat as cancel
+                return false;
+            }
+            update_pin_text_display(pin_insert);
         }
     }
 }
@@ -383,15 +418,15 @@ void reset_pin(pin_insert_t* pin_insert, const char* title)
 size_t get_pin_as_number(const pin_insert_t* pin_insert)
 {
     JADE_ASSERT(pin_insert);
-    JADE_ASSERT(pin_insert->selected_digit == PIN_SIZE); // entry complete
 
     size_t val = 0;
-    for (uint8_t i = 0; i < PIN_SIZE; ++i) {
+    const uint8_t ndigs = pin_insert->pin_digits_shown ? pin_insert->selected_digit : PIN_SIZE;
+    for (uint8_t i = 0; i < ndigs; ++i) {
         JADE_ASSERT(pin_insert->digit_status[i] == SET);
         JADE_ASSERT(pin_insert->pin[i] < NUM_PIN_VALUES);
 
         const size_t digit = pin_insert->pin[i];
-        const uint8_t exponent = PIN_SIZE - i - 1;
+        const uint8_t exponent = ndigs - i - 1;
         val += (digit * pow(10, exponent));
     }
 

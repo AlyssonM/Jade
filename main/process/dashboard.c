@@ -236,6 +236,11 @@ gui_activity_t* make_ble_activity(gui_view_node_t** ble_status_item);
 // Wallet initialisation functions
 bool derive_keychain(bool temporary_restore, const char* mnemonic);
 void initialise_with_mnemonic(bool temporary_restore, bool force_qr_scan, bool* offer_qr_temporary);
+bool pinclient_get(
+    jade_process_t* process, const uint8_t* pin, const size_t pin_len, uint8_t* finalaes, const size_t finalaes_len);
+bool mnemonic_scan_qr(char* mnemonic, size_t mnemonic_len);
+void get_passphrase(char* passphrase, size_t passphrase_len);
+void handle_scan_qr(void);
 
 // Register a new otp code
 bool register_otp_qr(void);
@@ -2115,7 +2120,7 @@ static gui_activity_t* create_settings_menu(const bool startup_menu)
     return act;
 }
 
-static void handle_settings(const bool startup_menu)
+static void handle_settings(jade_process_t* process, const bool startup_menu)
 {
     // Create the appropriate 'Settings' menu
     gui_activity_t* act = create_settings_menu(startup_menu);
@@ -2259,8 +2264,7 @@ static void handle_settings(const bool startup_menu)
         }
         case BTN_SETTINGS_EVM_SIGN:
         {
-            const char* message[] = { "Sign (EVM) via", "companion app", "RPC 'sign_evm_tx'" };
-            await_message_activity(message, 3);
+            handle_scan_qr();
             break;
         }
         case BTN_SETTINGS_EVM_METAMASK_QR:
@@ -2283,6 +2287,117 @@ static void handle_settings(const bool startup_menu)
             }
 
             display_evm_hdkey_qr(account_index);
+            break;
+        }
+
+        case BTN_SETTINGS_EVM_CONFIG:
+        {
+            if (!keychain_get()) {
+                const char* message[] = { "Unlock PIN antes", "de configurar EVM" };
+                await_error_activity(message, 2);
+                act = make_evm_settings_activity();
+                break;
+            }
+
+            const char* question[] = { "Usar raiz atual", "como Perfil EVM?" };
+            const bool accept = await_yesno_activity("Config EVM", question, 2, true, NULL);
+            if (accept) {
+                if (!keychain_set_evm_from_current()) {
+                    const char* message[] = { "Falha ao configurar", "Perfil EVM" };
+                    await_error_activity(message, 2);
+                    break;
+                }
+
+                const char* okmsg[] = { "Perfil EVM", "configurado" };
+                await_message_activity(okmsg, 2);
+
+                const char* persistq[] = { "Salvar criptografado?", keychain_current_aeskey_valid() ? "(sessao atual)" : "(QR PINserver)" };
+                if (await_yesno_activity(NULL, persistq, 2, true, NULL)) {
+                    if (keychain_current_aeskey_valid()) {
+                        if (!keychain_store_evm_current_session()) {
+                            const char* emsg[] = { "Falha ao salvar", "Perfil EVM" };
+                            await_error_activity(emsg, 2);
+                        } else {
+                            const char* ok[] = { "Perfil EVM", "salvo" };
+                            await_message_activity(ok, 2);
+                        }
+                    } else {
+                        done = offer_pinserver_qr_unlock();
+                    }
+                }
+            }
+            act = make_evm_settings_activity();
+            break;
+        }
+
+        case BTN_SETTINGS_EVM_CONFIG_QR:
+        {
+            if (!keychain_get()) {
+                const char* message[] = { "Unlock PIN antes", "de configurar EVM" };
+                await_error_activity(message, 2);
+                act = make_evm_settings_activity();
+                break;
+            }
+
+            char mnemonic[256];
+            SENSITIVE_PUSH(mnemonic, sizeof(mnemonic));
+            if (!mnemonic_scan_qr(mnemonic, sizeof(mnemonic))) {
+                SENSITIVE_POP(mnemonic);
+                act = make_evm_settings_activity();
+                break;
+            }
+
+            char passphrase[PASSPHRASE_MAX_LEN + 1];
+            SENSITIVE_PUSH(passphrase, sizeof(passphrase));
+            passphrase[0] = '\0';
+            get_passphrase(passphrase, sizeof(passphrase));
+
+            if (!keychain_set_evm_from_mnemonic(mnemonic, passphrase)) {
+                const char* emsg[] = { "Falha ao derivar", "Perfil EVM" };
+                await_error_activity(emsg, 2);
+                SENSITIVE_POP(passphrase);
+                SENSITIVE_POP(mnemonic);
+                act = make_evm_settings_activity();
+                break;
+            }
+            SENSITIVE_POP(passphrase);
+            SENSITIVE_POP(mnemonic);
+
+            const char* okmsg[] = { "Perfil EVM", "configurado" };
+            await_message_activity(okmsg, 2);
+
+            const char* persistq[] = { "Salvar criptografado?", keychain_current_aeskey_valid() ? "(sessao atual)" : "(QR PINserver)" };
+            if (await_yesno_activity(NULL, persistq, 2, true, NULL)) {
+                if (keychain_current_aeskey_valid()) {
+                    if (!keychain_store_evm_current_session()) {
+                        const char* emsg[] = { "Falha ao salvar", "Perfil EVM" };
+                        await_error_activity(emsg, 2);
+                    } else {
+                        const char* ok[] = { "Perfil EVM", "salvo" };
+                        await_message_activity(ok, 2);
+                    }
+                } else {
+                    done = offer_pinserver_qr_unlock();
+                }
+            }
+
+            if (!done) act = make_evm_settings_activity();
+            break;
+        }
+
+        case BTN_SETTINGS_EVM_ERASE:
+        {
+            const char* question[] = { "Apagar Perfil EVM?", "Isto remove do flash" };
+            if (await_yesno_activity("Confirmar", question, 2, true, NULL)) {
+                if (!keychain_erase_encrypted_evm()) {
+                    const char* emsg[] = { "Falha ao apagar", "Perfil EVM" };
+                    await_error_activity(emsg, 2);
+                } else {
+                    const char* ok[] = { "Perfil EVM apagado" };
+                    await_message_activity(ok, 1);
+                }
+            }
+            act = make_evm_settings_activity();
             break;
         }
 
@@ -2535,7 +2650,7 @@ static void handle_settings(const bool startup_menu)
 void offer_startup_options(void)
 {
     const bool is_startup_menu = true;
-    handle_settings(is_startup_menu);
+    handle_settings(NULL, is_startup_menu);
 }
 
 // Session logout or sleep/power-off
@@ -2614,7 +2729,7 @@ static void handle_qr_mode(void)
 }
 
 // Process buttons on the dashboard screen
-static void handle_btn(const int32_t btn)
+static void handle_btn(jade_process_t* process, const int32_t btn)
 {
     switch (btn) {
     case BTN_INITIALIZE:
@@ -2638,7 +2753,7 @@ static void handle_btn(const int32_t btn)
         break;
 
     case BTN_SETTINGS:
-        handle_settings(false);
+        handle_settings(process, false);
         break;
 
     case BTN_SCAN_QR:
@@ -2733,7 +2848,7 @@ static void do_dashboard(jade_process_t* process, const keychain_t* const initia
                     // Normal button press from some other home-like screen
                     // (eg. connect/connect-to screens etc)
                     main_thread_action = MAIN_THREAD_ACTIVITY_UI_MENU;
-                    handle_btn(ev_id);
+                    handle_btn(process, ev_id);
                     acted = true;
                 } else if (ev_base == GUI_EVENT) {
                     // Low-level gui event from the generic home screen
@@ -2757,7 +2872,7 @@ static void do_dashboard(jade_process_t* process, const keychain_t* const initia
                         // Click - handle the current button's event
                         main_thread_action = MAIN_THREAD_ACTIVITY_UI_MENU;
                         menu_item = get_selected_home_screen_menu_item(NULL);
-                        handle_btn(menu_item->btn_id);
+                        handle_btn(process, menu_item->btn_id);
                         acted = true;
                     }
                 }

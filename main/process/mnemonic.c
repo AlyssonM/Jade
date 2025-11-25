@@ -1183,6 +1183,11 @@ cleanup:
     return qr_scanned;
 }
 
+bool mnemonic_scan_qr(char* mnemonic, const size_t mnemonic_len)
+{
+    return mnemonic_qr(mnemonic, mnemonic_len);
+}
+
 static void get_freetext_passphrase(char* passphrase, const size_t passphrase_len)
 {
     JADE_ASSERT(passphrase);

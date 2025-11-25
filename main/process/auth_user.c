@@ -255,6 +255,17 @@ static bool get_pin_load_keys(jade_process_t* process, const bool suppress_pin_c
     // If an EVM profile is persisted, load it as well
     (void)keychain_load_evm(aeskey, sizeof(aeskey));
 
+    // Se existe um evm_xpriv em memória e ainda não está persistido, persistir agora com a mesma AES do PIN
+    if (!keychain_has_evm() && keychain_get() && keychain_get()->evm_xpriv.version) {
+        if (keychain_store_evm(aeskey, sizeof(aeskey))) {
+            const char* ok[] = { "Perfil EVM", "salvo" };
+            await_message_activity(ok, 2);
+        } else {
+            const char* emsg[] = { "Falha ao salvar", "Perfil EVM" };
+            await_error_activity(emsg, 2);
+        }
+    }
+
     // Re-set the (loaded) keychain in order to confirm the 'source'
     // (ie interface) which we will accept receiving messages from.
     // (This also clears any temporarily cached mnemonic entropy data)

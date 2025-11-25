@@ -886,11 +886,12 @@ gui_activity_t* make_evm_settings_activity(void)
     btn_data_t hdrbtns[] = { { .txt = "=", .font = JADE_SYMBOLS_16x16_FONT, .ev_id = BTN_SETTINGS_WALLET_EXIT },
         { .txt = NULL, .font = GUI_DEFAULT_FONT, .ev_id = GUI_BUTTON_EVENT_NONE } };
 
+    // Limitar a 4 itens para evitar erro interno de diálogo
     btn_data_t menubtns[] = { { .txt = "Receive (EVM)", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM_RECEIVE },
-        { .txt = "Sign (EVM)", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM_SIGN },
-        { .txt = "MetaMask (Airgapped)", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM_METAMASK_QR } };
-
-    return make_menu_activity("EVM", hdrbtns, 2, menubtns, 3);
+        { .txt = "Assinar (QR)", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM_SIGN },
+        { .txt = "MetaMask (Airgapped)", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM_METAMASK_QR },
+        { .txt = "Configurar via SeedQR", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM_CONFIG_QR } };
+    return make_menu_activity("EVM", hdrbtns, 2, menubtns, 4);
 }
 
 gui_activity_t* make_evm_receive_options_activity(

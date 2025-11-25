@@ -77,6 +77,30 @@ bool register_otp_string(const char* otp_uri, size_t uri_len, const char** errms
 int register_multisig_file(const char* multisig_file, size_t multisig_file_len, const char** errmsg);
 int update_pinserver(const CborValue* const params, const char** errmsg);
 int params_set_epoch_time(CborValue* params, const char** errmsg);
+
+#define HEX_LOG_PREVIEW_BYTES 64
+static void log_hex_preview(const char* label, const uint8_t* data, size_t len)
+{
+    if (!label) return;
+    if (!data || !len) {
+        JADE_LOGI("%s: <empty>", label);
+        return;
+    }
+    const size_t max_bytes = HEX_LOG_PREVIEW_BYTES;
+    size_t preview = len < max_bytes ? len : max_bytes;
+    char hexbuf[2 * max_bytes + 1];
+    for (size_t i = 0; i < preview; ++i) {
+        const unsigned v = data[i];
+        hexbuf[2 * i] = "0123456789abcdef"[(v >> 4) & 0xF];
+        hexbuf[2 * i + 1] = "0123456789abcdef"[v & 0xF];
+    }
+    hexbuf[2 * preview] = '\0';
+    if (preview < len) {
+        JADE_LOGI("%s (%u bytes, first %u shown): %s...", label, (unsigned)len, (unsigned)preview, hexbuf);
+    } else {
+        JADE_LOGI("%s (%u bytes): %s", label, (unsigned)len, hexbuf);
+    }
+}
 int sign_message_file(
     const char* str, size_t str_len, uint8_t* sig_output, size_t sig_len, size_t* written, const char** errmsg);
 int get_bip85_bip39_entropy_cbor(const CborValue* params, CborEncoder* output, const char** errmsg);
@@ -467,6 +491,9 @@ static bool handle_eth_sign_request_qr(const uint8_t* cbor, size_t cbor_len)
         return false;
     }
 
+    log_hex_preview("ETH-SIGN-REQUEST request-id", request_id, sizeof(request_id));
+    log_hex_preview("ETH-SIGN-REQUEST sign-data (raw)", sign_data, sign_data_len);
+
     bool free_decoded = false;
     if (sign_data_len >= 2) {
         const char* s = (const char*)sign_data;
@@ -739,23 +766,20 @@ static bool handle_eth_sign_request_qr(const uint8_t* cbor, size_t cbor_len)
         }
         if (!handled) {
             const uint8_t first = sign_data[0];
-            if (first == 0x02 || first == 0x01 || first == 0x00) {
+            if (first == 0x02 || first == 0x01) {
+                // Typed transactions must include the type prefix in the hashed bytes
                 keccak_256(sign_data, sign_data_len, hash);
-                JADE_LOGI("ETH-SIGN-REQUEST typed/legacy tx hash over %u bytes (prefix present)", (unsigned)sign_data_len);
-            } else if (first >= 0xC0) {
-                uint8_t* typed = JADE_MALLOC(1 + sign_data_len);
-                typed[0] = 0x02;
-                memcpy(typed + 1, sign_data, sign_data_len);
-                keccak_256(typed, 1 + sign_data_len, hash);
-                JADE_LOGI("ETH-SIGN-REQUEST typed tx hash over %u bytes (prefix added)", (unsigned)(1 + sign_data_len));
-                free(typed);
+                JADE_LOGI("ETH-SIGN-REQUEST typed tx hash over %u bytes (prefix present)", (unsigned)sign_data_len);
             } else {
+                // Legacy transaction or arbitrary bytes; hash exactly what was provided
                 keccak_256(sign_data, sign_data_len, hash);
                 JADE_LOGI("ETH-SIGN-REQUEST keccak256 over sign-data len=%u chain_id=%u", (unsigned)sign_data_len,
                     (unsigned)chain_id);
             }
         }
     }
+
+    log_hex_preview("ETH-SIGN-REQUEST digest (keccak256)", hash, sizeof(hash));
 
     if (free_decoded) {
         free(sign_data);
@@ -806,19 +830,54 @@ static bool handle_eth_sign_request_qr(const uint8_t* cbor, size_t cbor_len)
                                             CborValue arr;
                                             if (cbor_value_enter_container(&kpmap, &arr) == CborNoError) {
                                                 while (!cbor_value_at_end(&arr)) {
-                                                    uint64_t index = 0;
-                                                    bool hardened = false;
-                                                    if (!cbor_value_is_unsigned_integer(&arr)) break;
-                                                    if (cbor_value_get_uint64(&arr, &index) != CborNoError) break;
-                                                    if (cbor_value_advance_fixed(&arr) != CborNoError) break;
-                                                    if (!cbor_value_is_boolean(&arr)) break;
-                                                    if (cbor_value_get_boolean(&arr, &hardened) != CborNoError) break;
-                                                    if (cbor_value_advance_fixed(&arr) != CborNoError) break;
-                                                    if (path_len < sizeof(path) / sizeof(path[0]) && index <= 0xFFFFFFFFULL) {
-                                                        uint32_t comp = (uint32_t)index;
-                                                        if (hardened) comp |= BIP32_INITIAL_HARDENED_CHILD;
-                                                        path[path_len++] = comp;
+                                                    // Each component may be a map with keys: 1(index), 2(hardened)
+                                                    if (cbor_value_is_map(&arr)) {
+                                                        uint64_t index = 0;
+                                                        bool hardened = false;
+                                                        CborValue compmap;
+                                                        if (cbor_value_enter_container(&arr, &compmap) != CborNoError) break;
+                                                        while (!cbor_value_at_end(&compmap)) {
+                                                            int ck = -1;
+                                                            if (cbor_value_is_integer(&compmap)) {
+                                                                if (cbor_value_get_int(&compmap, &ck) != CborNoError) break;
+                                                            } else {
+                                                                break;
+                                                            }
+                                                            if (cbor_value_advance(&compmap) != CborNoError) break;
+                                                            if (ck == 1 && cbor_value_is_unsigned_integer(&compmap)) {
+                                                                cbor_value_get_uint64(&compmap, &index);
+                                                            } else if (ck == 2 && cbor_value_is_boolean(&compmap)) {
+                                                                cbor_value_get_boolean(&compmap, &hardened);
+                                                            }
+                                                            if (cbor_value_advance(&compmap) != CborNoError) break;
+                                                        }
+                                                        cbor_value_leave_container(&arr, &compmap);
+                                                        if (path_len < sizeof(path) / sizeof(path[0]) && index <= 0xFFFFFFFFULL) {
+                                                            uint32_t comp = (uint32_t)index;
+                                                            if (hardened) comp |= BIP32_INITIAL_HARDENED_CHILD;
+                                                            path[path_len++] = comp;
+                                                        }
+                                                    } else if (cbor_value_is_array(&arr)) {
+                                                        // Fallback: support array of [index, hardened]
+                                                        uint64_t index = 0;
+                                                        bool hardened = false;
+                                                        CborValue pair;
+                                                        if (cbor_value_enter_container(&arr, &pair) != CborNoError) break;
+                                                        if (cbor_value_is_unsigned_integer(&pair)) {
+                                                            cbor_value_get_uint64(&pair, &index);
+                                                        }
+                                                        cbor_value_advance_fixed(&pair);
+                                                        if (cbor_value_is_boolean(&pair)) {
+                                                            cbor_value_get_boolean(&pair, &hardened);
+                                                        }
+                                                        cbor_value_leave_container(&arr, &pair);
+                                                        if (path_len < sizeof(path) / sizeof(path[0]) && index <= 0xFFFFFFFFULL) {
+                                                            uint32_t comp = (uint32_t)index;
+                                                            if (hardened) comp |= BIP32_INITIAL_HARDENED_CHILD;
+                                                            path[path_len++] = comp;
+                                                        }
                                                     }
+                                                    if (cbor_value_advance(&arr) != CborNoError) break;
                                                 }
                                                 cbor_value_leave_container(&kpmap, &arr);
                                             }
@@ -900,6 +959,7 @@ static bool handle_eth_sign_request_qr(const uint8_t* cbor, size_t cbor_len)
         return false;
     }
     JADE_LOGI("ETH-SIGN-REQUEST signing ok: written=%u y_parity=%u", (unsigned)written, (unsigned)y_parity);
+    log_hex_preview("ETH-SIGN-REQUEST signature (r||s||v)", sig, sizeof(sig));
     display_eth_signature_qr(request_id, sizeof(request_id), sig);
     return true;
 }

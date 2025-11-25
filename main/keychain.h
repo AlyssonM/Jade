@@ -79,5 +79,8 @@ bool keychain_load_evm(const uint8_t* aeskey, size_t aeslen);
 bool keychain_erase_encrypted_evm(void);
 bool keychain_has_evm(void);
 bool keychain_set_evm_from_mnemonic(const char* mnemonic, const char* passphrase);
+bool keychain_set_evm_from_current(void);
+bool keychain_store_evm_current_session(void);
+bool keychain_current_aeskey_valid(void);
 
 #endif /* KEYCHAIN_H_ */
