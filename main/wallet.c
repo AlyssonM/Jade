@@ -404,8 +404,13 @@ static void wallet_get_privkey(const uint32_t* path, const size_t path_len, uint
 
     struct ext_key derived;
     SENSITIVE_PUSH(&derived, sizeof(derived));
+    const keychain_t* kc = keychain_get();
+    const struct ext_key* root = &kc->xpriv;
+    if (path_len >= 2 && path[0] == BIP44_PURPOSE && path[1] == BIP44_COIN_ETH && kc->evm_xpriv.version) {
+        root = &kc->evm_xpriv;
+    }
     JADE_WALLY_VERIFY(bip32_key_from_parent_path(
-        &keychain_get()->xpriv, path, path_len, BIP32_FLAG_KEY_PRIVATE | BIP32_FLAG_SKIP_HASH, &derived));
+        root, path, path_len, BIP32_FLAG_KEY_PRIVATE | BIP32_FLAG_SKIP_HASH, &derived));
 
     memcpy(output, derived.priv_key + 1, output_len);
     SENSITIVE_POP(&derived);
@@ -1298,11 +1303,16 @@ bool wallet_get_hdkey(const uint32_t* path, const size_t path_len, const uint32_
         return false;
     }
 
+    const keychain_t* kc = keychain_get();
+    const struct ext_key* root = &kc->xpriv;
+    if (path_len >= 2 && path && path[0] == BIP44_PURPOSE && path[1] == BIP44_COIN_ETH && kc->evm_xpriv.version) {
+        root = &kc->evm_xpriv;
+    }
     if (path_len == 0) {
         // Just copy root ext key
-        memcpy(output, &keychain_get()->xpriv, sizeof(struct ext_key));
+        memcpy(output, root, sizeof(struct ext_key));
     } else {
-        const int wret = bip32_key_from_parent_path(&keychain_get()->xpriv, path, path_len, flags, output);
+        const int wret = bip32_key_from_parent_path(root, path, path_len, flags, output);
         if (wret != WALLY_OK) {
             JADE_LOGE("Failed to derive key from path (size %u): %d", path_len, wret);
             return false;

@@ -15,6 +15,7 @@ typedef struct {
     uint8_t master_unblinding_key[HMAC_SHA512_LEN];
     uint8_t seed[BIP32_ENTROPY_LEN_512];
     struct ext_key xpriv;
+    struct ext_key evm_xpriv;
     struct ext_key cached_gaservice_main_root;
     struct ext_key cached_gaservice_subact_root;
     const struct ext_key* cached_service;
@@ -71,5 +72,12 @@ bool keychain_complete_derivation_with_passphrase(const char* passphrase);
 bool keychain_store(const uint8_t* aeskey, size_t aeslen);
 bool keychain_load(const uint8_t* aeskey, size_t aeslen);
 bool keychain_reencrypt(const uint8_t* curr_aeskey, size_t curr_aeslen, const uint8_t* new_aeskey, size_t new_aeslen);
+
+// EVM profile
+bool keychain_store_evm(const uint8_t* aeskey, size_t aeslen);
+bool keychain_load_evm(const uint8_t* aeskey, size_t aeslen);
+bool keychain_erase_encrypted_evm(void);
+bool keychain_has_evm(void);
+bool keychain_set_evm_from_mnemonic(const char* mnemonic, const char* passphrase);
 
 #endif /* KEYCHAIN_H_ */

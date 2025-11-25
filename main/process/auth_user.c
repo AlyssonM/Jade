@@ -252,6 +252,9 @@ static bool get_pin_load_keys(jade_process_t* process, const bool suppress_pin_c
         SENSITIVE_POP(passphrase);
     }
 
+    // If an EVM profile is persisted, load it as well
+    (void)keychain_load_evm(aeskey, sizeof(aeskey));
+
     // Re-set the (loaded) keychain in order to confirm the 'source'
     // (ie interface) which we will accept receiving messages from.
     // (This also clears any temporarily cached mnemonic entropy data)

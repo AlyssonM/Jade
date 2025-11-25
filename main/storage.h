@@ -51,6 +51,11 @@ uint8_t storage_get_counter(void);
 bool storage_get_replay_counter(uint32_t* replay_counter);
 bool storage_erase_encrypted_blob(void);
 
+// EVM profile blob
+bool storage_set_encrypted_blob_evm(const uint8_t* encrypted, size_t encrypted_len);
+bool storage_get_encrypted_blob_evm(uint8_t* encrypted, size_t encrypted_len, size_t* written);
+bool storage_erase_encrypted_blob_evm(void);
+
 bool storage_set_key_flags(uint8_t flags);
 uint8_t storage_get_key_flags(void);
 
