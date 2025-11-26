@@ -88,10 +88,13 @@ static void update_pin_text_display(pin_insert_t* pin_insert)
             gui_view_node_t* node = pin_insert->keypad_digit_nodes[i];
             if (!node) continue;
             char buf[2] = { ' ', '\0' };
+            color_t color = TFT_BLACK;
             if (i < pin_insert->selected_digit) {
                 buf[0] = pin_insert->pin_digits_shown ? PIN_CHARS[pin_insert->pin[i]] : '*';
+                color = TFT_WHITE;
             }
             gui_update_text(node, buf);
+            gui_set_color(node, color);
         }
         return;
     }
