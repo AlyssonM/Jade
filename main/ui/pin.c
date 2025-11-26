@@ -79,7 +79,24 @@ static void update_digit_node(pin_insert_t* pin_insert, uint8_t i)
 
 static void update_pin_text_display(pin_insert_t* pin_insert)
 {
-    if (!pin_insert || !pin_insert->pin_text_node) {
+    if (!pin_insert) {
+        return;
+    }
+
+    if (pin_insert->use_keypad_digits) {
+        for (size_t i = 0; i < PIN_SIZE; ++i) {
+            gui_view_node_t* node = pin_insert->keypad_digit_nodes[i];
+            if (!node) continue;
+            char buf[2] = { ' ', '\0' };
+            if (i < pin_insert->selected_digit) {
+                buf[0] = pin_insert->pin_digits_shown ? PIN_CHARS[pin_insert->pin[i]] : '*';
+            }
+            gui_update_text(node, buf);
+        }
+        return;
+    }
+
+    if (!pin_insert->pin_text_node) {
         return;
     }
 
@@ -167,9 +184,15 @@ void make_keypad_pin_insert_activity(pin_insert_t* pin_insert, const char* title
         gui_set_parent(vsplit, parent);
     }
 
-    gui_make_text_font(&pin_insert->pin_text_node, "", TFT_WHITE, DEJAVU24_FONT);
-    gui_set_align(pin_insert->pin_text_node, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
-    gui_set_parent(pin_insert->pin_text_node, vsplit);
+    gui_view_node_t* digit_row = make_even_split(UI_ROW, PIN_SIZE);
+    gui_set_parent(digit_row, vsplit);
+    pin_insert->pin_text_node = digit_row; // sentinel to indicate keypad layout
+    pin_insert->use_keypad_digits = true;
+    for (size_t i = 0; i < PIN_SIZE; ++i) {
+        gui_make_text_font(&pin_insert->keypad_digit_nodes[i], " ", TFT_WHITE, DEJAVU24_FONT);
+        gui_set_align(pin_insert->keypad_digit_nodes[i], GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+        gui_set_parent(pin_insert->keypad_digit_nodes[i], digit_row);
+    }
 
     gui_view_node_t* keypad_grid;
     gui_make_vsplit(&keypad_grid, GUI_SPLIT_RELATIVE, 4, 25, 25, 25, 25);
@@ -407,6 +430,10 @@ void reset_pin(pin_insert_t* pin_insert, const char* title)
         if (!pin_insert->pin_text_node) {
             update_digit_node(pin_insert, i);
         }
+    }
+
+    if (pin_insert->pin_text_node) {
+        update_pin_text_display(pin_insert);
     }
 
     // Update title if passed

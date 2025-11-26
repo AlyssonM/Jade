@@ -63,6 +63,8 @@ typedef struct {
     gui_activity_t* activity;
     gui_view_node_t* title;
     gui_view_node_t* pin_text_node;
+    gui_view_node_t* keypad_digit_nodes[PIN_SIZE];
+    bool use_keypad_digits;
 
     pin_digit_t pin_digit_nodes[PIN_SIZE];
 
