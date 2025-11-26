@@ -196,7 +196,7 @@ void tft_init_spi(void)
     };
 
     spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = 10 * 1000 * 1000,
+        .clock_speed_hz = 12 * 1000 * 1000,
         .mode = 0,
         .spics_io_num = TFT_CS,
         .queue_size = 7,
@@ -224,7 +224,7 @@ void tft_init_spi(void)
     };
 
     spi_device_interface_config_t touchcfg = {
-        .clock_speed_hz = 1 * 1000 * 1000, // 1 MHz is enough for XPT2046
+        .clock_speed_hz = 4 * 1000 * 1000, // 1 MHz is enough for XPT2046
         .mode = 0,
         .spics_io_num = TP_CS,
         .queue_size = 1,

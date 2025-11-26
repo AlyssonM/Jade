@@ -8,6 +8,9 @@
 // Display singlesig xpub qr code
 void display_xpub_qr(void);
 
+// Display Ethereum account hdkey for MetaMask airgapped
+void display_evm_hdkey_qr(uint16_t account_index);
+
 // Handle scanning a QR - supports addresses and PSBTs
 void handle_scan_qr(void);
 
@@ -28,5 +31,6 @@ bool await_qr_back_continue_activity(
 
 // Start pinserver authentication via qr codes
 void handle_qr_auth(bool suppress_pin_change_confirmation);
+void request_local_auth_unlock(bool suppress_pin_change_confirmation);
 
 #endif /* QRMODE_H_ */

@@ -122,6 +122,8 @@ bool wallet_get_message_hash(const uint8_t* bytes, size_t bytes_len, uint8_t* ou
 bool wallet_sign_message_hash(const uint8_t* signature_hash, size_t signature_hash_len, const uint32_t* path,
     size_t path_len, const uint8_t* ae_host_entropy, size_t ae_host_entropy_len, uint8_t* output, size_t output_len,
     size_t* written);
+bool wallet_sign_evm_hash(const uint8_t* hash32, size_t hash_len, const uint32_t* path, size_t path_len,
+    uint8_t* sig_rec, size_t sig_rec_len, size_t* written, uint8_t* y_parity);
 
 signing_data_t* signing_data_allocate(const size_t num_inputs);
 
@@ -145,5 +147,10 @@ bool wallet_get_shared_blinding_nonce(const uint8_t* master_blinding_key, size_t
 bool wallet_get_blinding_factor(const uint8_t* master_blinding_key, size_t master_blinding_key_len,
     const uint8_t* hash_prevouts, size_t hash_len, size_t output_index, BlindingFactorType_t type, uint8_t* output,
     size_t output_len);
+
+bool wallet_get_evm_address(const uint32_t* path, size_t path_len, char* output, size_t output_len);
+// Assina hash Keccak-256 de transação EVM (EIP-1559), retornando assinatura recuperável e yParity
+bool wallet_sign_evm_hash(const uint8_t* hash32, size_t hash_len, const uint32_t* path, size_t path_len,
+    uint8_t* sig_rec, size_t sig_rec_len, size_t* written, uint8_t* y_parity);
 
 #endif /* WALLET_H_ */

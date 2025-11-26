@@ -25,7 +25,10 @@
 static keychain_t* keychain_data = NULL;
 static network_type_t network_type_restriction = NETWORK_TYPE_NONE;
 static bool has_encrypted_blob = false;
+static bool has_encrypted_blob_evm = false;
 static uint8_t keychain_userdata = 0;
+static uint8_t current_aeskey[AES_KEY_LEN_256];
+static bool current_aeskey_valid = false;
 static bool keychain_temporary = false;
 
 // If using a passphrase we may need to cache the mnemonic entropy
@@ -492,6 +495,52 @@ static bool keychain_encrypt_and_save_blob(
     return true;
 }
 
+static bool keychain_encrypt_and_save_blob_evm(
+    const uint8_t* aeskey, const size_t aeslen, const uint8_t* cleartext_blob, const size_t blob_len)
+{
+    if (!aeskey || aeslen != AES_KEY_LEN_256) {
+        return false;
+    }
+    if (!cleartext_blob || blob_len > BIP32_SERIALIZED_LEN) {
+        return false;
+    }
+    uint8_t encrypted[ENCRYPTED_DATA_LEN(BIP32_SERIALIZED_LEN)];
+    const size_t encrypted_data_len = ENCRYPTED_DATA_LEN(blob_len);
+    if (!get_encrypted_blob(aeskey, aeslen, cleartext_blob, blob_len, encrypted, encrypted_data_len)) {
+        return false;
+    }
+    if (!storage_set_encrypted_blob_evm(encrypted, encrypted_data_len)) {
+        return false;
+    }
+    return true;
+}
+
+static bool keychain_load_and_decrypt_blob_evm(
+    const uint8_t* aeskey, const size_t aeslen, uint8_t* cleartext_blob, const size_t blob_len, size_t* written)
+{
+    if (!aeskey || aeslen != AES_KEY_LEN_256 || !cleartext_blob || blob_len < AES_PADDED_LEN(BIP32_SERIALIZED_LEN)
+        || !written) {
+        return false;
+    }
+    if (!keychain_has_pin() || !storage_decrement_counter()) {
+        return false;
+    }
+    uint8_t encrypted[ENCRYPTED_DATA_LEN(BIP32_SERIALIZED_LEN)];
+    size_t encrypted_data_len = 0;
+    if (!storage_get_encrypted_blob_evm(encrypted, sizeof(encrypted), &encrypted_data_len)) {
+        storage_erase_encrypted_blob_evm();
+        return false;
+    }
+    if (!get_decrypted_payload(aeskey, aeslen, encrypted, encrypted_data_len, cleartext_blob, blob_len, written)) {
+        if (keychain_pin_attempts_remaining() == 0) {
+            storage_erase_encrypted_blob_evm();
+        }
+        return false;
+    }
+    storage_restore_counter();
+    return true;
+}
+
 static bool keychain_load_and_decrypt_blob(
     const uint8_t* aeskey, const size_t aeslen, uint8_t* cleartext_blob, const size_t blob_len, size_t* written)
 {
@@ -582,7 +631,26 @@ bool keychain_store(const uint8_t* aeskey, const size_t aeslen)
     keychain_clear_network_type_restriction();
     has_encrypted_blob = true;
 
+    memcpy(current_aeskey, aeskey, aeslen);
+    current_aeskey_valid = true;
     return true;
+}
+
+bool keychain_store_evm(const uint8_t* aeskey, const size_t aeslen)
+{
+    if (!aeskey || aeslen != AES_KEY_LEN_256) {
+        return false;
+    }
+    if (!keychain_data) {
+        return false;
+    }
+    uint8_t serialized[BIP32_SERIALIZED_LEN];
+    JADE_WALLY_VERIFY(bip32_key_serialize(&keychain_data->evm_xpriv, BIP32_FLAG_KEY_PRIVATE, serialized, sizeof(serialized)));
+    const bool ok = keychain_encrypt_and_save_blob_evm(aeskey, aeslen, serialized, sizeof(serialized));
+    if (ok) {
+        has_encrypted_blob_evm = true;
+    }
+    return ok;
 }
 
 bool keychain_load(const uint8_t* aeskey, const size_t aeslen)
@@ -631,6 +699,29 @@ bool keychain_load(const uint8_t* aeskey, const size_t aeslen)
     }
     SENSITIVE_POP(serialized);
 
+    memcpy(current_aeskey, aeskey, aeslen);
+    current_aeskey_valid = true;
+    return true;
+}
+
+bool keychain_load_evm(const uint8_t* aeskey, const size_t aeslen)
+{
+    if (!aeskey || aeslen != AES_KEY_LEN_256) {
+        return false;
+    }
+    if (!keychain_data) {
+        return false;
+    }
+    size_t serialized_data_len = 0;
+    uint8_t serialized[AES_PADDED_LEN(BIP32_SERIALIZED_LEN)];
+    if (!keychain_load_and_decrypt_blob_evm(aeskey, aeslen, serialized, sizeof(serialized), &serialized_data_len)) {
+        return false;
+    }
+    if (serialized_data_len != BIP32_SERIALIZED_LEN) {
+        return false;
+    }
+    JADE_WALLY_VERIFY(bip32_key_unserialize(serialized, BIP32_SERIALIZED_LEN, &keychain_data->evm_xpriv));
+    has_encrypted_blob_evm = true;
     return true;
 }
 
@@ -669,6 +760,57 @@ bool keychain_reencrypt(
     }
     SENSITIVE_POP(serialized);
 
+    memcpy(current_aeskey, new_aeskey, new_aeslen);
+    current_aeskey_valid = true;
+    return true;
+}
+
+bool keychain_erase_encrypted_evm(void)
+{
+    const bool ok = storage_erase_encrypted_blob_evm();
+    if (ok) {
+        has_encrypted_blob_evm = false;
+        memset(&keychain_data->evm_xpriv, 0, sizeof(keychain_data->evm_xpriv));
+    }
+    return ok;
+}
+
+bool keychain_has_evm(void) { return has_encrypted_blob_evm; }
+
+bool keychain_set_evm_from_mnemonic(const char* mnemonic, const char* passphrase)
+{
+    if (!mnemonic) {
+        return false;
+    }
+    keychain_t tmp = { 0 };
+    SENSITIVE_PUSH(&tmp, sizeof(tmp));
+    const bool ok = keychain_derive_from_mnemonic(mnemonic, passphrase, &tmp);
+    if (ok) {
+        memcpy(&keychain_data->evm_xpriv, &tmp.xpriv, sizeof(struct ext_key));
+    }
+    SENSITIVE_POP(&tmp);
+    return ok;
+}
+
+bool keychain_store_evm_current_session(void)
+{
+    if (!current_aeskey_valid) return false;
+    if (!keychain_data) return false;
+    uint8_t serialized[BIP32_SERIALIZED_LEN];
+    JADE_WALLY_VERIFY(bip32_key_serialize(&keychain_data->evm_xpriv, BIP32_FLAG_KEY_PRIVATE, serialized, sizeof(serialized)));
+    const bool ok = keychain_encrypt_and_save_blob_evm(current_aeskey, sizeof(current_aeskey), serialized, sizeof(serialized));
+    if (ok) has_encrypted_blob_evm = true;
+    return ok;
+}
+
+bool keychain_current_aeskey_valid(void) { return current_aeskey_valid; }
+
+bool keychain_set_evm_from_current(void)
+{
+    if (!keychain_data) {
+        return false;
+    }
+    memcpy(&keychain_data->evm_xpriv, &keychain_data->xpriv, sizeof(struct ext_key));
     return true;
 }
 
@@ -711,6 +853,9 @@ void keychain_init_cache(void)
 
     // Cache the user key/passphrase preferences
     key_flags = storage_get_key_flags();
+    size_t w = 0;
+    uint8_t probe[AES_PADDED_LEN(BIP32_SERIALIZED_LEN)];
+    has_encrypted_blob_evm = storage_get_encrypted_blob_evm(probe, sizeof(probe), &w) && w > 0;
 }
 
 bool keychain_init_unit_key(void)

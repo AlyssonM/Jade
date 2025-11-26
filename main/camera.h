@@ -10,8 +10,8 @@
 
 // Size of the image as provided by the camera
 // TODO: fetch from Kconfig?
-#define CAMERA_IMAGE_WIDTH 320
-#define CAMERA_IMAGE_HEIGHT 240
+#define CAMERA_IMAGE_WIDTH 640
+#define CAMERA_IMAGE_HEIGHT 480
 
 // Function to process images from the camera.
 // Should return false if processing incomplete (and so should be called again with the next frame)

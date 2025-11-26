@@ -81,7 +81,7 @@ static bool get_pin_get_aeskey(jade_process_t* process, const char* title, uint8
 
     pin_insert_t pin_insert = { .initial_state = RANDOM, .pin_digits_shown = false };
     JADE_ASSERT(sizeof(pin_insert.pin) == pin_len);
-    make_pin_insert_activity(&pin_insert, title, msg);
+    make_keypad_pin_insert_activity(&pin_insert, title, msg);
     JADE_ASSERT(pin_insert.activity);
     SENSITIVE_PUSH(&pin_insert, sizeof(pin_insert_t));
 
@@ -90,7 +90,7 @@ static bool get_pin_get_aeskey(jade_process_t* process, const char* title, uint8
 
     // In a debug unattended ci build, use hardcoded pin after a short delay
 #ifndef CONFIG_DEBUG_UNATTENDED_CI
-    if (!run_pin_entry_loop(&pin_insert)) {
+    if (!run_keypad_pin_entry_loop(&pin_insert)) {
         // User abandoned entering pin
         jade_process_reject_message(process, CBOR_RPC_USER_CANCELLED, "User abandonded pin entry");
         SENSITIVE_POP(&pin_insert);
@@ -126,7 +126,7 @@ static bool set_pin_get_aeskey(jade_process_t* process, const char* title, uint8
     // In a debug unattended ci build, use hardcoded pin after a short delay
     pin_insert_t pin_insert = { .initial_state = RANDOM, .pin_digits_shown = false };
     JADE_ASSERT(sizeof(pin_insert.pin) == pin_len);
-    make_pin_insert_activity(&pin_insert, title, NULL);
+    make_keypad_pin_insert_activity(&pin_insert, title, NULL);
     JADE_ASSERT(pin_insert.activity);
     SENSITIVE_PUSH(&pin_insert, sizeof(pin_insert_t));
 
@@ -137,7 +137,7 @@ static bool set_pin_get_aeskey(jade_process_t* process, const char* title, uint8
         gui_set_current_activity_ex(pin_insert.activity, process->ctx.source == SOURCE_INTERNAL);
 
 #ifndef CONFIG_DEBUG_UNATTENDED_CI
-        if (!run_pin_entry_loop(&pin_insert)) {
+        if (!run_keypad_pin_entry_loop(&pin_insert)) {
             // User abandoned setting new pin
             jade_process_reject_message(process, CBOR_RPC_USER_CANCELLED, "User abandoned setting new PIN");
             SENSITIVE_POP(&pin_insert);
@@ -154,7 +154,7 @@ static bool set_pin_get_aeskey(jade_process_t* process, const char* title, uint8
         reset_pin(&pin_insert, "Confirm PIN");
 
 #ifndef CONFIG_DEBUG_UNATTENDED_CI
-        if (!run_pin_entry_loop(&pin_insert)) {
+        if (!run_keypad_pin_entry_loop(&pin_insert)) {
             // User abandoned second input - back to first ...
             continue;
         }
@@ -250,6 +250,20 @@ static bool get_pin_load_keys(jade_process_t* process, const bool suppress_pin_c
             goto cleanup;
         }
         SENSITIVE_POP(passphrase);
+    }
+
+    // If an EVM profile is persisted, load it as well
+    (void)keychain_load_evm(aeskey, sizeof(aeskey));
+
+    // Se existe um evm_xpriv em memória e ainda não está persistido, persistir agora com a mesma AES do PIN
+    if (!keychain_has_evm() && keychain_get() && keychain_get()->evm_xpriv.version) {
+        if (keychain_store_evm(aeskey, sizeof(aeskey))) {
+            const char* ok[] = { "Perfil EVM", "salvo" };
+            await_message_activity(ok, 2);
+        } else {
+            const char* emsg[] = { "Falha ao salvar", "Perfil EVM" };
+            await_error_activity(emsg, 2);
+        }
     }
 
     // Re-set the (loaded) keychain in order to confirm the 'source'

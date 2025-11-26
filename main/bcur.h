@@ -15,6 +15,9 @@ struct wally_psbt;
 extern const char BCUR_TYPE_CRYPTO_BIP39[];
 extern const char BCUR_TYPE_CRYPTO_ACCOUNT[];
 extern const char BCUR_TYPE_CRYPTO_HDKEY[];
+extern const char BCUR_TYPE_HDKEY[];
+extern const char BCUR_TYPE_ETH_SIGN_REQUEST[];
+extern const char BCUR_TYPE_ETH_SIGNATURE[];
 extern const char BCUR_TYPE_CRYPTO_PSBT[];
 extern const char BCUR_TYPE_JADE_PIN[];
 extern const char BCUR_TYPE_JADE_EPOCH[];
@@ -38,6 +41,13 @@ void bcur_build_cbor_crypto_account(script_variant_t script_variant, const uint3
     uint8_t* output, size_t output_len, size_t* written);
 bool bcur_build_cbor_bytes(const uint8_t* data, size_t data_len, uint8_t** output, size_t* output_len);
 bool bcur_build_cbor_crypto_psbt(const struct wally_psbt* psbt, uint8_t** output, size_t* output_len);
+
+bool bcur_build_cbor_eth_signature(
+    const uint8_t* request_id, size_t request_id_len, const uint8_t* sig65, size_t sig_len, uint8_t* output,
+    size_t output_len, size_t* written);
+
+bool bcur_parse_eth_sign_request(const uint8_t* cbor, size_t cbor_len, uint8_t* request_id, size_t request_id_len,
+    uint8_t** sign_data, size_t* sign_data_len, uint64_t* chain_id);
 
 // Scan a QR code that may be a BC-UR code/fragment - ie. single-frame or animated/multi-frame.
 // Returns true if a complete (ie. potentially multi-frame) bc-ur code is scanned, or if a single

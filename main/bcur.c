@@ -7,11 +7,15 @@
 #include "ui.h"
 #include "utils/malloc_ext.h"
 #include "utils/network.h"
+#include "utils/cbor_rpc.h"
 #include "utils/util.h"
 
 #include <cbor.h>
 #include <cdecoder.h>
 #include <cencoder.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
 
 // PSBT serialisation functions
 bool deserialise_psbt(const uint8_t* bytes, size_t bytes_len, struct wally_psbt** psbt_out);
@@ -20,6 +24,7 @@ bool serialise_psbt(const struct wally_psbt* psbt, uint8_t** output, size_t* out
 const char BCUR_TYPE_CRYPTO_BIP39[] = "crypto-bip39";
 const char BCUR_TYPE_CRYPTO_ACCOUNT[] = "crypto-account";
 const char BCUR_TYPE_CRYPTO_HDKEY[] = "crypto-hdkey";
+const char BCUR_TYPE_HDKEY[] = "hdkey";
 const char BCUR_TYPE_CRYPTO_PSBT[] = "crypto-psbt";
 const char BCUR_TYPE_JADE_PIN[] = "jade-pin";
 const char BCUR_TYPE_JADE_EPOCH[] = "jade-epoch";
@@ -27,6 +32,8 @@ const char BCUR_TYPE_JADE_UPDPS[] = "jade-updps";
 const char BCUR_TYPE_JADE_BIP8539_REQUEST[] = "jade-bip8539-request";
 const char BCUR_TYPE_JADE_BIP8539_REPLY[] = "jade-bip8539-reply";
 const char BCUR_TYPE_BYTES[] = "bytes";
+const char BCUR_TYPE_ETH_SIGN_REQUEST[] = "eth-sign-request";
+const char BCUR_TYPE_ETH_SIGNATURE[] = "eth-signature";
 
 static const char BCUR_PREFIX[] = "ur:";
 
@@ -392,8 +399,8 @@ static void encode_hdkey(CborEncoder* encoder, const uint32_t fingerprint, const
     JADE_ASSERT(path);
     JADE_ASSERT(path_len);
 
-    // We will include the 'useinfo' section if testnet
     const bool testnet = keychain_get_network_type_restriction() == NETWORK_TYPE_TEST;
+    const bool is_eth = (path_len >= 2) && (unharden(path[0]) == 44) && (unharden(path[1]) == 60);
 
     // The hdkey for the passed path
     struct ext_key hdkey;
@@ -403,7 +410,7 @@ static void encode_hdkey(CborEncoder* encoder, const uint32_t fingerprint, const
 
     // hdkey
     CborEncoder key_map_encoder;
-    CborError cberr = cbor_encoder_create_map(encoder, &key_map_encoder, testnet ? 5 : 4);
+    CborError cberr = cbor_encoder_create_map(encoder, &key_map_encoder, (testnet || is_eth) ? 5 : 4);
     JADE_ASSERT(cberr == CborNoError);
 
     // pubkey
@@ -418,8 +425,7 @@ static void encode_hdkey(CborEncoder* encoder, const uint32_t fingerprint, const
     cberr = cbor_encode_byte_string(&key_map_encoder, hdkey.chain_code, sizeof(hdkey.chain_code));
     JADE_ASSERT(cberr == CborNoError);
 
-    // use-info (to indicate testnet wallet)
-    if (testnet) {
+    if (testnet || is_eth) {
         cberr = cbor_encode_uint(&key_map_encoder, 5);
         JADE_ASSERT(cberr == CborNoError);
         {
@@ -428,19 +434,20 @@ static void encode_hdkey(CborEncoder* encoder, const uint32_t fingerprint, const
             cberr = cbor_encoder_create_map(&key_map_encoder, &use_info_map_encoder, 2);
             JADE_ASSERT(cberr == CborNoError);
 
-            // type - btc
             cberr = cbor_encode_uint(&use_info_map_encoder, 1);
             JADE_ASSERT(cberr == CborNoError);
-            cberr = cbor_encode_uint(&use_info_map_encoder, 0);
+            cberr = cbor_encode_uint(&use_info_map_encoder, is_eth ? 60 : 0);
             JADE_ASSERT(cberr == CborNoError);
 
-            // network
             cberr = cbor_encode_uint(&use_info_map_encoder, 2);
             JADE_ASSERT(cberr == CborNoError);
-            cberr = cbor_encode_uint(&use_info_map_encoder, testnet ? 1 : 0);
+            if (is_eth) {
+                cberr = cbor_encode_uint(&use_info_map_encoder, 0);
+            } else {
+                cberr = cbor_encode_uint(&use_info_map_encoder, testnet ? 1 : 0);
+            }
             JADE_ASSERT(cberr == CborNoError);
 
-            // Close the use-info map
             cberr = cbor_encoder_close_container(&key_map_encoder, &use_info_map_encoder);
             JADE_ASSERT(cberr == CborNoError);
         }
@@ -526,6 +533,7 @@ void bcur_build_cbor_crypto_hdkey(
     cbor_encoder_init(&root_encoder, output, output_len, 0);
 
     // hdkey
+    cbor_encode_tag(&root_encoder, 303);
     encode_hdkey(&root_encoder, fingerprint, path, path_len);
 
     *written = cbor_encoder_get_buffer_size(&root_encoder, output);
@@ -610,12 +618,14 @@ static bool collect_any_bcur(qr_data_t* qr_data)
     if (qr_data->len < sizeof(BCUR_PREFIX)
         || strncasecmp((const char*)qr_data->data, BCUR_PREFIX, sizeof(BCUR_PREFIX) - 1)) {
         // Not bc-ur - return immediately
+        JADE_LOGI("Non-UR scanned payload (len=%u): %s", (unsigned)qr_data->len, (const char*)qr_data->data);
         update_progress_bar(qr_data->progress_bar, 1, 1);
         return true;
     }
 
     // The scanned data looks like a bcur code or fragment, add it to the bcur decoder
     // and return true only when the bcur decoder says the message is complete.
+    JADE_LOGI("UR scanned fragment: %s", (const char*)qr_data->data);
     const bool processed_part = urreceive_part_decoder(qr_data->ctx, (const char*)qr_data->data);
 
     // On hard failure, reset the decoder
@@ -780,6 +790,190 @@ void bcur_create_qr_icons(const uint8_t* payload, const size_t len, const char* 
     // Return the created icons
     *icons = qr_icons;
     *num_icons = num_fragments;
+}
+
+bool bcur_build_cbor_eth_signature(
+    const uint8_t* request_id, const size_t request_id_len, const uint8_t* sig65, const size_t sig_len,
+    uint8_t* output, const size_t output_len, size_t* written)
+{
+    JADE_ASSERT(request_id);
+    JADE_ASSERT(request_id_len);
+    JADE_ASSERT(sig65);
+    JADE_ASSERT(sig_len == 65);
+    JADE_ASSERT(output);
+    JADE_ASSERT(output_len >= 96);
+    JADE_INIT_OUT_SIZE(written);
+
+    CborEncoder root_encoder;
+    cbor_encoder_init(&root_encoder, output, output_len, 0);
+    CborEncoder map_encoder;
+    CborError cberr = cbor_encoder_create_map(&root_encoder, &map_encoder, 2);
+    JADE_ASSERT(cberr == CborNoError);
+
+    cberr = cbor_encode_uint(&map_encoder, 1);
+    JADE_ASSERT(cberr == CborNoError);
+    cbor_encode_tag(&map_encoder, 37);
+    cberr = cbor_encode_byte_string(&map_encoder, request_id, request_id_len);
+    JADE_ASSERT(cberr == CborNoError);
+
+    cberr = cbor_encode_uint(&map_encoder, 2);
+    JADE_ASSERT(cberr == CborNoError);
+    cberr = cbor_encode_byte_string(&map_encoder, sig65, sig_len);
+    JADE_ASSERT(cberr == CborNoError);
+
+    cberr = cbor_encoder_close_container(&root_encoder, &map_encoder);
+    JADE_ASSERT(cberr == CborNoError);
+
+    *written = cbor_encoder_get_buffer_size(&root_encoder, output);
+    JADE_ASSERT(*written);
+    return true;
+}
+
+bool bcur_parse_eth_sign_request(const uint8_t* cbor, size_t cbor_len, uint8_t* request_id, size_t request_id_len,
+    uint8_t** sign_data, size_t* sign_data_len, uint64_t* chain_id)
+{
+    JADE_ASSERT(cbor);
+    JADE_ASSERT(cbor_len);
+    JADE_INIT_OUT_PPTR(sign_data);
+    JADE_INIT_OUT_SIZE(sign_data_len);
+
+    if (chain_id) *chain_id = 1;
+
+    JADE_LOGI("ETH-SIGN-REQUEST parse start cbor_len=%u", (unsigned)cbor_len);
+
+    CborParser parser;
+    CborValue root;
+    CborError cberr = cbor_parser_init(cbor, cbor_len, CborValidateCompleteData, &parser, &root);
+    if (cberr != CborNoError || !cbor_value_is_valid(&root) || !cbor_value_is_map(&root)) {
+        return false;
+    }
+
+    CborValue it;
+    cberr = cbor_value_enter_container(&root, &it);
+    if (cberr != CborNoError) return false;
+
+    while (!cbor_value_at_end(&it)) {
+        int key = -1;
+        const char* skey = NULL;
+        size_t skey_len = 0;
+
+        if (cbor_value_is_integer(&it)) {
+            cberr = cbor_value_get_int(&it, &key);
+            if (cberr != CborNoError) break;
+        } else if (cbor_value_is_text_string(&it)) {
+            rpc_get_raw_string_ptr(&it, &skey, &skey_len);
+            if (!skey || !skey_len) break;
+        } else {
+            break;
+        }
+
+        cberr = cbor_value_advance(&it);
+        if (cberr != CborNoError) break;
+
+        const bool is_req_id_key = (key == 1 || key == 4 || key == 6)
+            || (skey && (!strncasecmp(skey, "requestid", skey_len)
+                || !strncasecmp(skey, "request-id", skey_len)));
+        const bool is_sign_data_key = (key == 2)
+            || (skey && (!strncasecmp(skey, "data", skey_len)
+                || !strncasecmp(skey, "sign_data", skey_len)
+                || !strncasecmp(skey, "sign-data", skey_len)));
+        const bool is_chain_id_key = (chain_id && (key == 3
+            || (skey && (!strncasecmp(skey, "chainid", skey_len)
+                || !strncasecmp(skey, "chain-id", skey_len)))));
+
+        JADE_LOGI("ETH-SIGN-REQUEST key %d/%.*s type=%d", key, (int)skey_len, skey ? skey : "",
+            (int)cbor_value_get_type(&it));
+
+        if (is_req_id_key) {
+            if (cbor_value_is_tag(&it)) {
+                CborTag tag;
+                cbor_value_get_tag(&it, &tag);
+                if (tag == 37) {
+                    cberr = cbor_value_advance(&it);
+                    if (cberr != CborNoError) break;
+                }
+            }
+            const uint8_t* bytes = NULL;
+            size_t len = 0;
+            rpc_get_raw_bytes_ptr(&it, &bytes, &len);
+            if (bytes && len && request_id && request_id_len) {
+                const size_t copy_len = len < request_id_len ? len : request_id_len;
+                memcpy(request_id, bytes, copy_len);
+                JADE_LOGI("ETH-SIGN-REQUEST request-id len %u", (unsigned)len);
+            }
+        } else if (is_sign_data_key) {
+            if (cbor_value_is_tag(&it)) {
+                CborTag tag;
+                cbor_value_get_tag(&it, &tag);
+                JADE_LOGI("ETH-SIGN-REQUEST sign-data tag %lu", (unsigned long)tag);
+                cberr = cbor_value_advance(&it);
+                if (cberr != CborNoError) break;
+            }
+            const uint8_t* bytes = NULL;
+            size_t len = 0;
+            rpc_get_raw_bytes_ptr(&it, &bytes, &len);
+            if (bytes && len) {
+                *sign_data = (uint8_t*)bytes;
+                *sign_data_len = len;
+                JADE_LOGI("ETH-SIGN-REQUEST sign-data len %u", (unsigned)len);
+            } else if (cbor_value_is_text_string(&it)) {
+                const char* s = NULL;
+                size_t s_len = 0;
+                rpc_get_raw_string_ptr(&it, &s, &s_len);
+                if (s && s_len) {
+                    *sign_data = (uint8_t*)s;
+                    *sign_data_len = s_len;
+                    JADE_LOGI("ETH-SIGN-REQUEST sign-data text len %u", (unsigned)s_len);
+                }
+            } else {
+                JADE_LOGW("ETH-SIGN-REQUEST sign-data unexpected type=%d", (int)cbor_value_get_type(&it));
+            }
+        } else if (is_chain_id_key) {
+            if (cbor_value_is_unsigned_integer(&it)) {
+                uint64_t v = 0;
+                cbor_value_get_uint64(&it, &v);
+                if (v > 0) *chain_id = v;
+                JADE_LOGI("ETH-SIGN-REQUEST chain-id uint %u", (unsigned)(chain_id ? *chain_id : 0));
+            } else if (cbor_value_is_integer(&it)) {
+                int64_t v = 0;
+                cbor_value_get_int64(&it, &v);
+                if (v > 0) *chain_id = (uint64_t)v;
+                JADE_LOGI("ETH-SIGN-REQUEST chain-id int %u", (unsigned)(chain_id ? *chain_id : 0));
+            } else if (cbor_value_is_text_string(&it)) {
+                const char* s = NULL;
+                size_t s_len = 0;
+                rpc_get_raw_string_ptr(&it, &s, &s_len);
+                if (s && s_len) {
+                    uint64_t v = 0;
+                    if (s_len >= 3 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+                        for (size_t i = 2; i < s_len; ++i) {
+                            char c = s[i];
+                            v <<= 4;
+                            if (c >= '0' && c <= '9') v |= (uint64_t)(c - '0');
+                            else if (c >= 'a' && c <= 'f') v |= (uint64_t)(10 + c - 'a');
+                            else if (c >= 'A' && c <= 'F') v |= (uint64_t)(10 + c - 'A');
+                            else { v = 0; break; }
+                        }
+                    } else {
+                        for (size_t i = 0; i < s_len; ++i) {
+                            char c = s[i];
+                            if (c < '0' || c > '9') { v = 0; break; }
+                            v = v * 10 + (uint64_t)(c - '0');
+                        }
+                    }
+                    if (v > 0) *chain_id = v;
+                    JADE_LOGI("ETH-SIGN-REQUEST chain-id str %u", (unsigned)(chain_id ? *chain_id : 0));
+                }
+            }
+        }
+
+        cberr = cbor_value_advance(&it);
+        if (cberr != CborNoError) break;
+    }
+    const bool ok = *sign_data && *sign_data_len;
+    JADE_LOGI("ETH-SIGN-REQUEST parse end ok=%u sign_data_len=%u chain_id=%u", (unsigned)ok,
+        (unsigned)(*sign_data_len), (unsigned)(chain_id ? *chain_id : 0));
+    return ok;
 }
 
 #ifdef CONFIG_DEBUG_MODE

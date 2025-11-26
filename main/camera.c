@@ -1,5 +1,6 @@
 #ifndef AMALGAMATED_BUILD
 #include <esp_camera.h>
+#include <esp_log.h>
 #include <freertos/idf_additions.h>
 
 #include "button_events.h"
@@ -38,8 +39,8 @@ void camera_set_debug_image(const uint8_t* data, const size_t len)
 #define CAMERA_MIN_TIMEOUT_SECS 300
 
 // Size of the image as provided by the camera
-#define CAMERA_IMAGE_RESOLUTION FRAMESIZE_QVGA
-#if (CAMERA_IMAGE_WIDTH != 320) || (CAMERA_IMAGE_HEIGHT != 240)
+#define CAMERA_IMAGE_RESOLUTION FRAMESIZE_VGA
+#if (CAMERA_IMAGE_WIDTH != 640) || (CAMERA_IMAGE_HEIGHT != 480)
 #error CAMERA_IMAGE_WIDTH/HEIGHT inconsistent with CAMERA_IMAGE_RESOLUTION!
 #endif
 
@@ -269,7 +270,7 @@ static void jade_camera_init(void)
         .pixel_format = PIXFORMAT_GRAYSCALE,
         .frame_size = CAMERA_IMAGE_RESOLUTION,
 
-        .fb_count = 2,
+        .fb_count = 1,
         .fb_location = CAMERA_FB_IN_PSRAM,
         .grab_mode = CAMERA_GRAB_LATEST,
 
@@ -290,6 +291,8 @@ static void jade_camera_init(void)
     JADE_ASSERT(camera_info->model);
 
     JADE_LOGI("The camera in use is: %s (%u)", camera_info->name, camera_info->model);
+
+    // Default logging level for cam_hal
 
     // GC0308 appears to need image flipping on both axes
     if (camera_info->model == CAMERA_GC0308) {
@@ -312,6 +315,29 @@ static void jade_camera_init(void)
         }
     }
 
+    // Improve sharpness and reduce blur/noise for QR decoding
+    // if (camera_sensor->set_sharpness) {
+    //     camera_sensor->set_sharpness(camera_sensor, 2);
+    // }
+    // if (camera_sensor->set_denoise) {
+    //     camera_sensor->set_denoise(camera_sensor, 1);
+    // }
+    // if (camera_sensor->set_lenc) {
+    //     camera_sensor->set_lenc(camera_sensor, 1);
+    // }
+    // if (camera_sensor->set_dcw) {
+    //     camera_sensor->set_dcw(camera_sensor, 1);
+    // }
+    // if (camera_sensor->set_bpc) {
+    //     camera_sensor->set_bpc(camera_sensor, 1);
+    // }
+    // if (camera_sensor->set_wpc) {
+    //     camera_sensor->set_wpc(camera_sensor, 1);
+    // }
+    // if (camera_sensor->set_brightness) {
+    //     camera_sensor->set_brightness(camera_sensor, 1);
+    // }
+
 #if defined(CONFIG_DISPLAY_TOUCHSCREEN)
     touchscreen_deinit();
     touchscreen_init();
@@ -324,6 +350,9 @@ static void jade_camera_stop(void)
 {
     esp_camera_deinit();
     power_camera_off();
+#ifdef ESP_PLATFORM
+    // Restore default logging level for cam_hal
+#endif
 #if defined(CONFIG_DISPLAY_TOUCHSCREEN)
     touchscreen_deinit();
     touchscreen_init();
@@ -443,7 +472,7 @@ static void jade_camera_task(void* data)
 
         // If we have a gui, update a subset of frames on screen and check for button events
         if (camera_config->show_ui) {
-            const bool do_ui_update = ((frame_counter % 2) == 0);
+        const bool do_ui_update = ((frame_counter % 2) == 0);
 
             if (do_ui_update) {
                 // Copy from camera output to screen image

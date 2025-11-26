@@ -21,7 +21,9 @@
 #include "utils/malloc_ext.h"
 #include "utils/network.h"
 #include "wallet.h"
+#include "utils/shake256.h"
 
+#include <cbor.h>
 #include <wally_script.h>
 
 #include <string.h>
@@ -75,6 +77,30 @@ bool register_otp_string(const char* otp_uri, size_t uri_len, const char** errms
 int register_multisig_file(const char* multisig_file, size_t multisig_file_len, const char** errmsg);
 int update_pinserver(const CborValue* const params, const char** errmsg);
 int params_set_epoch_time(CborValue* params, const char** errmsg);
+
+#define HEX_LOG_PREVIEW_BYTES 64
+static void log_hex_preview(const char* label, const uint8_t* data, size_t len)
+{
+    if (!label) return;
+    if (!data || !len) {
+        JADE_LOGI("%s: <empty>", label);
+        return;
+    }
+    const size_t max_bytes = HEX_LOG_PREVIEW_BYTES;
+    size_t preview = len < max_bytes ? len : max_bytes;
+    char hexbuf[2 * max_bytes + 1];
+    for (size_t i = 0; i < preview; ++i) {
+        const unsigned v = data[i];
+        hexbuf[2 * i] = "0123456789abcdef"[(v >> 4) & 0xF];
+        hexbuf[2 * i + 1] = "0123456789abcdef"[v & 0xF];
+    }
+    hexbuf[2 * preview] = '\0';
+    if (preview < len) {
+        JADE_LOGI("%s (%u bytes, first %u shown): %s...", label, (unsigned)len, (unsigned)preview, hexbuf);
+    } else {
+        JADE_LOGI("%s (%u bytes): %s", label, (unsigned)len, hexbuf);
+    }
+}
 int sign_message_file(
     const char* str, size_t str_len, uint8_t* sig_output, size_t sig_len, size_t* written, const char** errmsg);
 int get_bip85_bip39_entropy_cbor(const CborValue* params, CborEncoder* output, const char** errmsg);
@@ -86,6 +112,9 @@ bool handle_mnemonic_qr(const char* mnemonic);
 bool select_registered_wallet(const char multisig_names[][NVS_KEY_NAME_MAX_SIZE], size_t num_multisigs,
     const char descriptor_names[][NVS_KEY_NAME_MAX_SIZE], size_t num_descriptors, const char** wallet_name_out,
     bool* is_multisig);
+
+static void display_bcur_qr(const char* message[], size_t message_size, const char* bcur_type,
+    const uint8_t* cbor, size_t cbor_len, const char* help_url);
 
 // PSBT struct and functions
 struct wally_psbt;
@@ -285,7 +314,7 @@ static bool handle_xpub_options(uint32_t* qr_flags)
     gui_update_text(wallet_textbox, xpub_wallettype_desc_from_flags(*qr_flags));
 
     pin_insert_t pin_insert = { .initial_state = ZERO, .pin_digits_shown = true };
-    make_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
+    make_keypad_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
     JADE_ASSERT(pin_insert.activity);
 
     const uint32_t initial_flags = *qr_flags;
@@ -329,7 +358,7 @@ static bool handle_xpub_options(uint32_t* qr_flags)
             while (true) {
                 reset_pin(&pin_insert, NULL);
                 gui_set_current_activity(pin_insert.activity);
-                if (!run_pin_entry_loop(&pin_insert)) {
+                if (!run_keypad_pin_entry_loop(&pin_insert)) {
                     // User abandoned index entry
                     break;
                 }
@@ -398,6 +427,541 @@ void display_xpub_qr(void)
             break;
         }
     }
+}
+
+void display_evm_hdkey_qr(uint16_t account_index)
+{
+    uint32_t path[3] = {
+        BIP32_INITIAL_HARDENED_CHILD + 44,
+        BIP32_INITIAL_HARDENED_CHILD + 60,
+        BIP32_INITIAL_HARDENED_CHILD + (uint32_t)account_index,
+    };
+
+    uint8_t cbor[128];
+    size_t written = 0;
+    bcur_build_cbor_crypto_hdkey(path, 3, cbor, sizeof(cbor), &written);
+
+    Icon* icons = NULL;
+    size_t num_icons = 0;
+    const uint8_t qrcode_version = qr_version_from_flags(QR_DENSITY_LOW);
+    bcur_create_qr_icons(cbor, written, BCUR_TYPE_CRYPTO_HDKEY, qrcode_version, &icons, &num_icons);
+
+    char pathstr[MAX_PATH_STR_LEN(3)];
+    const bool ok = wallet_bip32_path_as_str(path, 3, pathstr, sizeof(pathstr));
+    JADE_ASSERT(ok);
+
+    const char* message[] = { "MetaMask (Airgapped)", pathstr };
+    const uint8_t frames_per_qr = qr_framerate_from_flags(QR_SPEED_LOW);
+    gui_activity_t* const act = make_show_qr_activity(message, 2, icons, num_icons, frames_per_qr, false);
+
+    while (true) {
+        gui_set_current_activity(act);
+        const int32_t ev_id = gui_activity_wait_button(act, BTN_QR_DISPLAY_EXIT);
+        if (ev_id == BTN_QR_BRIGHTNESS) {
+            gui_next_qrcode_color();
+            gui_repaint(act->root_node);
+        } else if (ev_id == BTN_QR_DISPLAY_EXIT) {
+            break;
+        }
+    }
+}
+
+static void display_eth_signature_qr(const uint8_t* request_id, size_t request_id_len, const uint8_t* sig65)
+{
+    uint8_t cbor[128];
+    size_t written = 0;
+    bcur_build_cbor_eth_signature(request_id, request_id_len, sig65, 65, cbor, sizeof(cbor), &written);
+    const char* message[] = { "ETH Signature" };
+    display_bcur_qr(message, 1, BCUR_TYPE_ETH_SIGNATURE, cbor, written, "blkstrm.com/ethsig");
+}
+
+static bool handle_eth_sign_request_qr(const uint8_t* cbor, size_t cbor_len)
+{
+    uint8_t request_id[16];
+    memset(request_id, 0, sizeof(request_id));
+    uint8_t* sign_data = NULL;
+    size_t sign_data_len = 0;
+    uint64_t chain_id = 1;
+    const bool parsed = bcur_parse_eth_sign_request(cbor, cbor_len, request_id, sizeof(request_id), &sign_data, &sign_data_len, &chain_id);
+    if (!parsed || !sign_data || !sign_data_len) {
+        JADE_LOGE("ETH-SIGN-REQUEST invalid: parsed=%u sign_data=%p len=%u chain_id=%u cbor_len=%u",
+            (unsigned)parsed, sign_data, (unsigned)sign_data_len, (unsigned)chain_id, (unsigned)cbor_len);
+        const char* message[] = { "ETH Sign Request", "invalido" };
+        await_error_activity(message, 2);
+        return false;
+    }
+
+    log_hex_preview("ETH-SIGN-REQUEST request-id", request_id, sizeof(request_id));
+    log_hex_preview("ETH-SIGN-REQUEST sign-data (raw)", sign_data, sign_data_len);
+
+    bool free_decoded = false;
+    if (sign_data_len >= 2) {
+        const char* s = (const char*)sign_data;
+        size_t idx = (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) ? 2 : 0;
+        bool is_hex = true;
+        for (size_t i = idx; i < sign_data_len; ++i) {
+            const char c = s[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                is_hex = false;
+                break;
+            }
+        }
+        if (is_hex && ((sign_data_len - idx) % 2) == 0) {
+            const size_t out_len = (sign_data_len - idx) / 2;
+            uint8_t* decoded = JADE_MALLOC(out_len);
+            for (size_t i = 0; i < out_len; ++i) {
+                const char h = s[idx + 2 * i];
+                const char l = s[idx + 2 * i + 1];
+                uint8_t v = 0;
+                v |= (h >= '0' && h <= '9') ? (uint8_t)(h - '0') : (uint8_t)(10 + (h | 0x20) - 'a');
+                v <<= 4;
+                v |= (l >= '0' && l <= '9') ? (uint8_t)(l - '0') : (uint8_t)(10 + (l | 0x20) - 'a');
+                decoded[i] = v;
+            }
+            sign_data = decoded;
+            sign_data_len = out_len;
+            free_decoded = true;
+            JADE_LOGI("ETH-SIGN-REQUEST decoded hex sign-data to %u bytes", (unsigned)out_len);
+        }
+    }
+
+    uint8_t hash[32];
+    if (sign_data_len == 32) {
+        memcpy(hash, sign_data, 32);
+        JADE_LOGI("ETH-SIGN-REQUEST using provided hash len=32 chain_id=%u", (unsigned)chain_id);
+    } else if (sign_data_len > 0) {
+        bool handled = false;
+        size_t p = 0;
+        while (p < sign_data_len && ((char)sign_data[p] == ' ' || (char)sign_data[p] == '\n' || (char)sign_data[p] == '\r' || (char)sign_data[p] == '\t')) {
+            ++p;
+        }
+        if (p < sign_data_len && (char)sign_data[p] == '{') {
+            const char* js = (const char*)sign_data;
+            size_t jlen = sign_data_len;
+            const char* dom_start = NULL;
+            size_t dom_len = 0;
+            const char* msg_start = NULL;
+            size_t msg_len = 0;
+            const char* k = "\"domain\"";
+            const char* pos = strstr(js, k);
+            if (pos) {
+                const char* c = strchr(pos, '{');
+                if (c) {
+                    int depth = 1;
+                    const char* q = c + 1;
+                    while (q < js + jlen && depth) {
+                        if (*q == '{') depth++;
+                        else if (*q == '}') depth--;
+                        q++;
+                    }
+                    if (depth == 0) {
+                        dom_start = c;
+                        dom_len = (size_t)(q - c);
+                    }
+                }
+            }
+            k = "\"message\"";
+            pos = strstr(js, k);
+            if (pos) {
+                const char* c = strchr(pos, '{');
+                if (c) {
+                    int depth = 1;
+                    const char* q = c + 1;
+                    while (q < js + jlen && depth) {
+                        if (*q == '{') depth++;
+                        else if (*q == '}') depth--;
+                        q++;
+                    }
+                    if (depth == 0) {
+                        msg_start = c;
+                        msg_len = (size_t)(q - c);
+                    }
+                }
+            }
+            if (dom_start && dom_len && msg_start && msg_len) {
+                char name[64];
+                char version[32];
+                uint64_t domain_chain_id = 0;
+                char verifying[43];
+                memset(name, 0, sizeof(name));
+                memset(version, 0, sizeof(version));
+                memset(verifying, 0, sizeof(verifying));
+                const char* sdom = dom_start;
+                size_t sdom_len = dom_len;
+                const char* smsg = msg_start;
+                size_t smsg_len = msg_len;
+
+                {
+                    const char* t = strstr(sdom, "\"name\"");
+                    if (t) {
+                        const char* c = strchr(t, ':');
+                        if (c) {
+                            c++;
+                            while (c < sdom + sdom_len && (*c == ' ' || *c == '\n' || *c == '\r' || *c == '\t')) c++;
+                            if (*c == '"') c++;
+                            const char* e = strchr(c, '"');
+                            if (e && (size_t)(e - c) < sizeof(name)) {
+                                memcpy(name, c, (size_t)(e - c));
+                            }
+                        }
+                    }
+                }
+                {
+                    const char* t = strstr(sdom, "\"version\"");
+                    if (t) {
+                        const char* c = strchr(t, ':');
+                        if (c) {
+                            c++;
+                            while (c < sdom + sdom_len && (*c == ' ' || *c == '\n' || *c == '\r' || *c == '\t')) c++;
+                            if (*c == '"') c++;
+                            const char* e = strchr(c, '"');
+                            if (e && (size_t)(e - c) < sizeof(version)) {
+                                memcpy(version, c, (size_t)(e - c));
+                            }
+                        }
+                    }
+                }
+                {
+                    const char* t = strstr(sdom, "\"chainId\"");
+                    if (t) {
+                        const char* c = strchr(t, ':');
+                        if (c) {
+                            c++;
+                            while (c < sdom + sdom_len && (*c == ' ' || *c == '\n' || *c == '\r' || *c == '\t')) c++;
+                            uint64_t v = 0;
+                            while (c < sdom + sdom_len && *c >= '0' && *c <= '9') { v = v * 10 + (uint64_t)(*c - '0'); c++; }
+                            domain_chain_id = v;
+                        }
+                    }
+                }
+                {
+                    const char* t = strstr(sdom, "\"verifyingContract\"");
+                    if (t) {
+                        const char* c = strchr(t, ':');
+                        if (c) {
+                            c++;
+                            while (c < sdom + sdom_len && (*c == ' ' || *c == '\n' || *c == '\r' || *c == '\t')) c++;
+                            if (*c == '"') c++;
+                            const char* e = strchr(c, '"');
+                            if (e && (size_t)(e - c) < sizeof(verifying)) {
+                                memcpy(verifying, c, (size_t)(e - c));
+                            }
+                        }
+                    }
+                }
+                char hlchain[32];
+                memset(hlchain, 0, sizeof(hlchain));
+                uint64_t timev = 0;
+                {
+                    const char* t = strstr(smsg, "\"hyperliquidChain\"");
+                    if (t) {
+                        const char* c = strchr(t, ':');
+                        if (c) {
+                            c++;
+                            while (c < smsg + smsg_len && (*c == ' ' || *c == '\n' || *c == '\r' || *c == '\t')) c++;
+                            if (*c == '"') c++;
+                            const char* e = strchr(c, '"');
+                            if (e && (size_t)(e - c) < sizeof(hlchain)) {
+                                memcpy(hlchain, c, (size_t)(e - c));
+                            }
+                        }
+                    }
+                }
+                {
+                    const char* t = strstr(smsg, "\"time\"");
+                    if (t) {
+                        const char* c = strchr(t, ':');
+                        if (c) {
+                            c++;
+                            while (c < smsg + smsg_len && (*c == ' ' || *c == '\n' || *c == '\r' || *c == '\t')) c++;
+                            uint64_t v = 0;
+                            while (c < smsg + smsg_len && *c >= '0' && *c <= '9') { v = v * 10 + (uint64_t)(*c - '0'); c++; }
+                            timev = v;
+                        }
+                    }
+                }
+
+                JADE_LOGI("EIP-712 extracted domain name=%s version=%s chainId=%u verifying=%s",
+                    name, version, (unsigned)domain_chain_id, verifying);
+                JADE_LOGI("EIP-712 extracted message hyperliquidChain=%s time=%llu",
+                    hlchain, (unsigned long long)timev);
+
+                uint8_t typehash_domain[32];
+                const char* domtype = "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
+                keccak_256((const uint8_t*)domtype, strlen(domtype), typehash_domain);
+                uint8_t namehash[32];
+                uint8_t verhash[32];
+                keccak_256((const uint8_t*)name, strlen(name), namehash);
+                keccak_256((const uint8_t*)version, strlen(version), verhash);
+                uint8_t chainid32[32];
+                memset(chainid32, 0, sizeof(chainid32));
+                for (int i = 0; i < 8; ++i) {
+                    chainid32[31 - i] = (uint8_t)((domain_chain_id >> (8 * i)) & 0xFF);
+                }
+                uint8_t addr20[20];
+                memset(addr20, 0, sizeof(addr20));
+                if (verifying[0]) {
+                    const char* v = verifying;
+                    size_t vlen = strlen(verifying);
+                    size_t idx = (vlen >= 2 && v[0] == '0' && (v[1] == 'x' || v[1] == 'X')) ? 2 : 0;
+                    if (vlen - idx >= 40) {
+                        for (int i = 0; i < 20; ++i) {
+                            char h = v[idx + 2 * i];
+                            char l = v[idx + 2 * i + 1];
+                            uint8_t b = 0;
+                            b |= (h >= '0' && h <= '9') ? (uint8_t)(h - '0') : (uint8_t)(10 + (h | 0x20) - 'a');
+                            b <<= 4;
+                            b |= (l >= '0' && l <= '9') ? (uint8_t)(l - '0') : (uint8_t)(10 + (l | 0x20) - 'a');
+                            addr20[i] = b;
+                        }
+                    }
+                }
+                uint8_t addr32[32];
+                memset(addr32, 0, sizeof(addr32));
+                memcpy(addr32 + 12, addr20, 20);
+                uint8_t domenc[160];
+                memcpy(domenc + 0, typehash_domain, 32);
+                memcpy(domenc + 32, namehash, 32);
+                memcpy(domenc + 64, verhash, 32);
+                memcpy(domenc + 96, chainid32, 32);
+                memcpy(domenc + 128, addr32, 32);
+                uint8_t domsep[32];
+                keccak_256(domenc, sizeof(domenc), domsep);
+
+                uint8_t typehash_msg[32];
+                const char* msgtype = "Hyperliquid:AcceptTerms(string hyperliquidChain,uint64 time)";
+                keccak_256((const uint8_t*)msgtype, strlen(msgtype), typehash_msg);
+                uint8_t chainhash[32];
+                keccak_256((const uint8_t*)hlchain, strlen(hlchain), chainhash);
+                uint8_t time32[32];
+                memset(time32, 0, sizeof(time32));
+                for (int i = 0; i < 8; ++i) {
+                    time32[31 - i] = (uint8_t)((timev >> (8 * i)) & 0xFF);
+                }
+                uint8_t msgenc[96];
+                memcpy(msgenc + 0, typehash_msg, 32);
+                memcpy(msgenc + 32, chainhash, 32);
+                memcpy(msgenc + 64, time32, 32);
+                uint8_t msghash[32];
+                keccak_256(msgenc, sizeof(msgenc), msghash);
+
+                uint8_t prefix[2] = { 0x19, 0x01 };
+                uint8_t full[66];
+                memcpy(full, prefix, 2);
+                memcpy(full + 2, domsep, 32);
+                memcpy(full + 34, msghash, 32);
+                keccak_256(full, sizeof(full), hash);
+                {
+                    char hexbuf[65];
+                    for (int i = 0; i < 32; ++i) {
+                        unsigned v = (unsigned)hash[i];
+                        hexbuf[2 * i] = "0123456789abcdef"[(v >> 4) & 0xF];
+                        hexbuf[2 * i + 1] = "0123456789abcdef"[v & 0xF];
+                    }
+                    hexbuf[64] = '\0';
+                    JADE_LOGI("ETH-SIGN-REQUEST EIP-712 digest over JSON payload: %s", hexbuf);
+                }
+                handled = true;
+            }
+        }
+        if (!handled) {
+            const uint8_t first = sign_data[0];
+            if (first == 0x02 || first == 0x01) {
+                // Typed transactions must include the type prefix in the hashed bytes
+                keccak_256(sign_data, sign_data_len, hash);
+                JADE_LOGI("ETH-SIGN-REQUEST typed tx hash over %u bytes (prefix present)", (unsigned)sign_data_len);
+            } else {
+                // Legacy transaction or arbitrary bytes; hash exactly what was provided
+                keccak_256(sign_data, sign_data_len, hash);
+                JADE_LOGI("ETH-SIGN-REQUEST keccak256 over sign-data len=%u chain_id=%u", (unsigned)sign_data_len,
+                    (unsigned)chain_id);
+            }
+        }
+    }
+
+    log_hex_preview("ETH-SIGN-REQUEST digest (keccak256)", hash, sizeof(hash));
+
+    if (free_decoded) {
+        free(sign_data);
+    }
+
+    uint32_t path[10];
+    size_t path_len = 0;
+    {
+        CborParser parser;
+        CborValue root;
+        CborError cberr = cbor_parser_init(cbor, cbor_len, CborValidateCompleteData, &parser, &root);
+        if (cberr == CborNoError && cbor_value_is_valid(&root) && cbor_value_is_map(&root)) {
+            CborValue it;
+            if (cbor_value_enter_container(&root, &it) == CborNoError) {
+                while (!cbor_value_at_end(&it)) {
+                    int key = -1;
+                    if (cbor_value_is_integer(&it)) {
+                        if (cbor_value_get_int(&it, &key) != CborNoError) break;
+                    } else if (cbor_value_is_text_string(&it)) {
+                        // Unsupported string keys for derivation path; skip
+                        key = -1;
+                    } else {
+                        break;
+                    }
+                    if (cbor_value_advance(&it) != CborNoError) break;
+
+                    if (key == 5 || key == 6) {
+                        if (cbor_value_is_tag(&it)) {
+                            CborTag tag;
+                            cbor_value_get_tag(&it, &tag);
+                            if (tag == 304) {
+                                if (cbor_value_advance(&it) != CborNoError) break;
+                            }
+                        }
+                        if (cbor_value_is_map(&it)) {
+                            CborValue kpmap;
+                            if (cbor_value_enter_container(&it, &kpmap) == CborNoError) {
+                                while (!cbor_value_at_end(&kpmap)) {
+                                    int k = -1;
+                                    if (cbor_value_is_integer(&kpmap)) {
+                                        if (cbor_value_get_int(&kpmap, &k) != CborNoError) break;
+                                    }
+                                    if (cbor_value_advance(&kpmap) != CborNoError) break;
+                                    if (k == 1 && cbor_value_is_array(&kpmap)) {
+                                        size_t n = 0;
+                                        cbor_value_get_array_length(&kpmap, &n);
+                                        if (n && cbor_value_is_container(&kpmap)) {
+                                            CborValue arr;
+                                            if (cbor_value_enter_container(&kpmap, &arr) == CborNoError) {
+                                                while (!cbor_value_at_end(&arr)) {
+                                                    // Each component may be a map with keys: 1(index), 2(hardened)
+                                                    if (cbor_value_is_map(&arr)) {
+                                                        uint64_t index = 0;
+                                                        bool hardened = false;
+                                                        CborValue compmap;
+                                                        if (cbor_value_enter_container(&arr, &compmap) != CborNoError) break;
+                                                        while (!cbor_value_at_end(&compmap)) {
+                                                            int ck = -1;
+                                                            if (cbor_value_is_integer(&compmap)) {
+                                                                if (cbor_value_get_int(&compmap, &ck) != CborNoError) break;
+                                                            } else {
+                                                                break;
+                                                            }
+                                                            if (cbor_value_advance(&compmap) != CborNoError) break;
+                                                            if (ck == 1 && cbor_value_is_unsigned_integer(&compmap)) {
+                                                                cbor_value_get_uint64(&compmap, &index);
+                                                            } else if (ck == 2 && cbor_value_is_boolean(&compmap)) {
+                                                                cbor_value_get_boolean(&compmap, &hardened);
+                                                            }
+                                                            if (cbor_value_advance(&compmap) != CborNoError) break;
+                                                        }
+                                                        cbor_value_leave_container(&arr, &compmap);
+                                                        if (path_len < sizeof(path) / sizeof(path[0]) && index <= 0xFFFFFFFFULL) {
+                                                            uint32_t comp = (uint32_t)index;
+                                                            if (hardened) comp |= BIP32_INITIAL_HARDENED_CHILD;
+                                                            path[path_len++] = comp;
+                                                        }
+                                                    } else if (cbor_value_is_array(&arr)) {
+                                                        // Fallback: support array of [index, hardened]
+                                                        uint64_t index = 0;
+                                                        bool hardened = false;
+                                                        CborValue pair;
+                                                        if (cbor_value_enter_container(&arr, &pair) != CborNoError) break;
+                                                        if (cbor_value_is_unsigned_integer(&pair)) {
+                                                            cbor_value_get_uint64(&pair, &index);
+                                                        }
+                                                        cbor_value_advance_fixed(&pair);
+                                                        if (cbor_value_is_boolean(&pair)) {
+                                                            cbor_value_get_boolean(&pair, &hardened);
+                                                        }
+                                                        cbor_value_leave_container(&arr, &pair);
+                                                        if (path_len < sizeof(path) / sizeof(path[0]) && index <= 0xFFFFFFFFULL) {
+                                                            uint32_t comp = (uint32_t)index;
+                                                            if (hardened) comp |= BIP32_INITIAL_HARDENED_CHILD;
+                                                            path[path_len++] = comp;
+                                                        }
+                                                    }
+                                                    if (cbor_value_advance(&arr) != CborNoError) break;
+                                                }
+                                                cbor_value_leave_container(&kpmap, &arr);
+                                            }
+                                        }
+                                    }
+                                    // advance to next map entry
+                                    if (cbor_value_advance(&kpmap) != CborNoError) break;
+                                }
+                                // do not assert/leave; container scope ends here implicitly
+                            }
+                        }
+                        // we've parsed keypath; no need to parse further
+                        break;
+                    }
+                    if (cbor_value_advance(&it) != CborNoError) break;
+                }
+                // do not assert/leave root; parser scope ends when function returns
+            }
+        }
+    }
+    if (!path_len) {
+        path[0] = BIP32_INITIAL_HARDENED_CHILD + 44;
+        path[1] = BIP32_INITIAL_HARDENED_CHILD + 60;
+        path[2] = BIP32_INITIAL_HARDENED_CHILD + 0;
+        path[3] = 0;
+        path[4] = 0;
+        path_len = 5;
+        JADE_LOGI("ETH-SIGN-REQUEST using default path m/44'/60'/0'/0/0");
+
+        char addr[64];
+        if (wallet_get_evm_address(path, path_len, addr, sizeof(addr))) {
+            bool confirmed = show_confirm_address_activity(addr, true);
+            if (!confirmed) {
+                path[4] = 1;
+                if (wallet_get_evm_address(path, path_len, addr, sizeof(addr))) {
+                    confirmed = show_confirm_address_activity(addr, true);
+                    if (!confirmed) {
+                        const char* message[] = { "Endereco nao confirmado" };
+                        await_error_activity(message, 1);
+                        return false;
+                    }
+                    JADE_LOGI("ETH-SIGN-REQUEST address index switched to 1");
+                }
+            }
+        }
+    } else {
+        char buf[96];
+        size_t pos = 0;
+        buf[pos++] = 'm';
+        for (size_t i = 0; i < path_len && pos < sizeof(buf) - 1; ++i) {
+            buf[pos++] = '/';
+            uint32_t comp = path[i];
+            bool hardened = false;
+            if (comp & BIP32_INITIAL_HARDENED_CHILD) {
+                hardened = true;
+                comp &= ~BIP32_INITIAL_HARDENED_CHILD;
+            }
+            char tmp[16];
+            int rc = snprintf(tmp, sizeof(tmp), "%u%s", (unsigned)comp, hardened ? "'" : "");
+            if (rc > 0) {
+                size_t cpy = (size_t)rc;
+                if (pos + cpy >= sizeof(buf)) cpy = sizeof(buf) - 1 - pos;
+                memcpy(buf + pos, tmp, cpy);
+                pos += cpy;
+            }
+        }
+        buf[pos] = '\0';
+        JADE_LOGI("ETH-SIGN-REQUEST using path %s", buf);
+    }
+    uint8_t sig[65];
+    size_t written = 65;
+    uint8_t y_parity = 0;
+    const bool ok = wallet_sign_evm_hash(hash, sizeof(hash), path, path_len, sig, sizeof(sig), &written, &y_parity);
+    if (!ok || written != 65) {
+        JADE_LOGE("ETH-SIGN-REQUEST signing failed: ok=%u written=%u y_parity=%u", (unsigned)ok, (unsigned)written,
+            (unsigned)y_parity);
+        const char* message[] = { "Assinatura ETH", "falhou" };
+        await_error_activity(message, 2);
+        return false;
+    }
+    JADE_LOGI("ETH-SIGN-REQUEST signing ok: written=%u y_parity=%u", (unsigned)written, (unsigned)y_parity);
+    log_hex_preview("ETH-SIGN-REQUEST signature (r||s||v)", sig, sizeof(sig));
+    display_eth_signature_qr(request_id, sizeof(request_id), sig);
+    return true;
 }
 
 // Helper to get user to select and load registered wallet record
@@ -562,12 +1126,12 @@ static bool handle_address_options(const bool show_account, uint16_t* account_in
 
             if (ev_id == BTN_SCAN_ADDRESS_OPTIONS_ACCOUNT && show_account) {
                 pin_insert_t pin_insert = { .initial_state = ZERO, .pin_digits_shown = true };
-                make_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
+                make_keypad_pin_insert_activity(&pin_insert, "Account Index", "Enter index:");
                 JADE_ASSERT(pin_insert.activity);
 
                 while (true) {
                     gui_set_current_activity(pin_insert.activity);
-                    if (!run_pin_entry_loop(&pin_insert)) {
+                    if (!run_keypad_pin_entry_loop(&pin_insert)) {
                         // User abandoned index entry
                         break;
                     }
@@ -1294,6 +1858,11 @@ void handle_scan_qr(void)
             if (!handle_bcur_bytes(data, data_len)) {
                 JADE_LOGE("Processing BC-UR BYTES failed");
             }
+        } else if (!strcasecmp(type, BCUR_TYPE_ETH_SIGN_REQUEST)
+                || (strcasestr(type, BCUR_TYPE_ETH_SIGN_REQUEST) != NULL)) {
+            if (!handle_eth_sign_request_qr(data, data_len)) {
+                JADE_LOGE("Processing BC-UR ETH sign-request failed");
+            }
         } else {
             // Other - unhandled
             JADE_LOGW("Unhandled BC-UR type: %s", type);
@@ -1737,5 +2306,9 @@ void handle_qr_auth(const bool suppress_pin_change_confirmation)
         retval == pdPASS, "Failed to create auth_qr_client_task, xTaskCreatePinnedToCore() returned %d", retval);
 
     // Then we return to the dispatcher to handle messages as sent by the task we have just started
+}
+void request_local_auth_unlock(bool suppress_pin_change_confirmation)
+{
+    post_auth_msg_request(SOURCE_INTERNAL, suppress_pin_change_confirmation);
 }
 #endif // AMALGAMATED_BUILD

@@ -1183,6 +1183,11 @@ cleanup:
     return qr_scanned;
 }
 
+bool mnemonic_scan_qr(char* mnemonic, const size_t mnemonic_len)
+{
+    return mnemonic_qr(mnemonic, mnemonic_len);
+}
+
 static void get_freetext_passphrase(char* passphrase, const size_t passphrase_len)
 {
     JADE_ASSERT(passphrase);
@@ -1518,14 +1523,14 @@ void handle_bip85_mnemonic()
 
     // Fetch index (uses pin-entry screen)
     pin_insert_t pin_insert = { .initial_state = ZERO, .pin_digits_shown = true };
-    make_pin_insert_activity(&pin_insert, "BIP85", "Index #:");
+    make_keypad_pin_insert_activity(&pin_insert, "BIP85", "Index #:");
     JADE_ASSERT(pin_insert.activity);
 
     size_t index = 0;
     while (true) {
         reset_pin(&pin_insert, "BIP85");
         gui_set_current_activity(pin_insert.activity);
-        if (!run_pin_entry_loop(&pin_insert)) {
+        if (!run_keypad_pin_entry_loop(&pin_insert)) {
             // User abandoned index entry
             JADE_LOGI("User abandoned selecting index");
             return;

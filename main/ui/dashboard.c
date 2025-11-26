@@ -299,12 +299,26 @@ gui_activity_t* make_locked_settings_activity(void)
     btn_data_t hdrbtns[] = { { .txt = "=", .font = JADE_SYMBOLS_16x16_FONT, .ev_id = BTN_SETTINGS_EXIT },
         { .txt = NULL, .font = GUI_DEFAULT_FONT, .ev_id = GUI_BUTTON_EVENT_NONE } };
 
-    btn_data_t menubtns[]
-        = { { .txt = "BIP39 Passphrase", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_BIP39_PASSPHRASE },
-              { .txt = "Device", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_DEVICE },
-              { .txt = "Temporary Signer", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_TEMPORARY_WALLET_LOGIN } };
+    btn_data_t menubtns[] = {
+        { .txt = "BIP39 Passphrase", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_BIP39_PASSPHRASE },
+        { .txt = "Device", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_DEVICE },
+        { .txt = "Temporary Signer", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_TEMPORARY_WALLET_LOGIN }
+    };
+    return make_menu_activity("Options", hdrbtns, 2, menubtns, 3);
+}
 
-    return make_menu_activity("Options", hdrbtns, 2, menubtns, sizeof(menubtns) / sizeof(btn_data_t));
+gui_activity_t* make_locked_more_activity(void)
+{
+    btn_data_t hdrbtns[] = { { .txt = "=", .font = JADE_SYMBOLS_16x16_FONT, .ev_id = BTN_SETTINGS_LOCKED_MORE_EXIT },
+        { .txt = NULL, .font = GUI_DEFAULT_FONT, .ev_id = GUI_BUTTON_EVENT_NONE } };
+
+    btn_data_t menubtns[] = {
+        { .txt = "Device", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_DEVICE },
+        { .txt = "Temporary Signer", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_TEMPORARY_WALLET_LOGIN },
+        { .txt = "BIP39 Passphrase", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_BIP39_PASSPHRASE }
+    };
+
+    return make_menu_activity("Options", hdrbtns, 2, menubtns, 3);
 }
 
 gui_activity_t* make_unlocked_settings_activity(void)
@@ -329,9 +343,10 @@ gui_activity_t* make_wallet_settings_activity(void)
 
     btn_data_t menubtns[] = { { .txt = "Export Xpub", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_XPUB_EXPORT },
         { .txt = "Registered Wallets", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_REGISTERED_WALLETS },
-        { .txt = "BIP85", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_BIP85 } };
+        { .txt = "BIP85", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_BIP85 },
+        { .txt = "EVM", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM } };
 
-    return make_menu_activity("Wallet", hdrbtns, 2, menubtns, 3);
+    return make_menu_activity("Wallet", hdrbtns, 2, menubtns, 4);
 }
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3
@@ -865,5 +880,44 @@ gui_activity_t* make_storage_stats_activity(const size_t entries_used, const siz
     gui_set_parent(node, hsplit);
 
     return act;
+}
+gui_activity_t* make_evm_settings_activity(void)
+{
+    btn_data_t hdrbtns[] = { { .txt = "=", .font = JADE_SYMBOLS_16x16_FONT, .ev_id = BTN_SETTINGS_WALLET_EXIT },
+        { .txt = NULL, .font = GUI_DEFAULT_FONT, .ev_id = GUI_BUTTON_EVENT_NONE } };
+
+    // Limitar a 4 itens para evitar erro interno de diálogo
+    btn_data_t menubtns[] = { { .txt = "Receive (EVM)", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM_RECEIVE },
+        { .txt = "Assinar (QR)", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM_SIGN },
+        { .txt = "MetaMask (Airgapped)", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM_METAMASK_QR },
+        { .txt = "Configurar via SeedQR", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_EVM_CONFIG_QR } };
+    return make_menu_activity("EVM", hdrbtns, 2, menubtns, 4);
+}
+
+gui_activity_t* make_evm_receive_options_activity(
+    gui_view_node_t** account_textbox, gui_view_node_t** change_textbox, gui_view_node_t** index_textbox)
+{
+    JADE_INIT_OUT_PPTR(account_textbox);
+    JADE_INIT_OUT_PPTR(change_textbox);
+    JADE_INIT_OUT_PPTR(index_textbox);
+
+    btn_data_t hdrbtns[] = { { .txt = "=", .font = JADE_SYMBOLS_16x16_FONT, .ev_id = BTN_EVM_OPTIONS_EXIT },
+        { .txt = NULL, .font = GUI_DEFAULT_FONT, .ev_id = GUI_BUTTON_EVENT_NONE } };
+
+    gui_make_text(account_textbox, "Account Index", TFT_WHITE);
+    gui_set_align(*account_textbox, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+
+    gui_make_text(change_textbox, "Change", TFT_WHITE);
+    gui_set_align(*change_textbox, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+
+    gui_make_text(index_textbox, "Pointer", TFT_WHITE);
+    gui_set_align(*index_textbox, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+
+    btn_data_t menubtns[] = { { .content = *account_textbox, .font = GUI_DEFAULT_FONT, .ev_id = BTN_EVM_OPTIONS_ACCOUNT },
+        { .content = *change_textbox, .font = GUI_DEFAULT_FONT, .ev_id = BTN_EVM_OPTIONS_CHANGE },
+        { .content = *index_textbox, .font = GUI_DEFAULT_FONT, .ev_id = BTN_EVM_OPTIONS_INDEX },
+        { .txt = "Continue", .font = GUI_DEFAULT_FONT, .ev_id = BTN_EVM_OPTIONS_CONTINUE } };
+
+    return make_menu_activity("EVM Receive", hdrbtns, 2, menubtns, 4);
 }
 #endif // AMALGAMATED_BUILD

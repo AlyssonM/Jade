@@ -13,3 +13,6 @@
 [submodule "components/esp32_bc-ur"]
 	path = components/esp32_bc-ur
 	url = https://github.com/Blockstream/esp32_bc-ur
+[submodule "foundation-ur-py"]
+	path = foundation-ur-py
+	url = https://github.com/Foundation-Devices/foundation-ur-py

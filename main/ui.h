@@ -62,6 +62,9 @@ typedef struct {
 
     gui_activity_t* activity;
     gui_view_node_t* title;
+    gui_view_node_t* pin_text_node;
+    gui_view_node_t* keypad_digit_nodes[PIN_SIZE];
+    bool use_keypad_digits;
 
     pin_digit_t pin_digit_nodes[PIN_SIZE];
 
@@ -160,8 +163,10 @@ void make_keyboard_entry_activity(keyboard_entry_t* kb_entry, const char* title)
 void run_keyboard_entry_loop(keyboard_entry_t* kb_entry);
 
 // Functions for pin entry
-void make_pin_insert_activity(pin_insert_t* pin_insert, const char* title, const char* message);
-bool run_pin_entry_loop(pin_insert_t* pin_insert);
+
+void make_keypad_pin_insert_activity(pin_insert_t* pin_insert, const char* title, const char* message);
+bool run_keypad_pin_entry_loop(pin_insert_t* pin_insert);
+
 void reset_pin(pin_insert_t* pin_insert, const char* title);
 size_t get_pin_as_number(const pin_insert_t* pin_insert);
 

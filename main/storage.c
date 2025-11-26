@@ -24,6 +24,7 @@ static const char* PIN_PRIVATEKEY_FIELD = "privatekey";
 static const char* PIN_COUNTER_FIELD = "counter";
 static const char* REPLAY_COUNTER_FIELD = "antireplay";
 static const char* BLOB_FIELD = "blob";
+static const char* EVMBLOB_FIELD = "evmblob";
 static const char* KEY_FLAGS_FIELD = "keyflags";
 static const char* WALLET_ERASE_PIN = "walleterasepin";
 
@@ -464,6 +465,25 @@ bool storage_erase_encrypted_blob(void)
 
     // Return whether or not we successfully erase the encrypted key
     return erase_key(DEFAULT_NAMESPACE, BLOB_FIELD);
+}
+
+bool storage_set_encrypted_blob_evm(const uint8_t* encrypted, const size_t encrypted_len)
+{
+    JADE_ASSERT(encrypted);
+    if (!storage_restore_counter()) {
+        return false;
+    }
+    return store_blob(DEFAULT_NAMESPACE, EVMBLOB_FIELD, encrypted, encrypted_len);
+}
+
+bool storage_get_encrypted_blob_evm(uint8_t* encrypted, const size_t encrypted_len, size_t* written)
+{
+    return read_blob(DEFAULT_NAMESPACE, EVMBLOB_FIELD, encrypted, encrypted_len, written);
+}
+
+bool storage_erase_encrypted_blob_evm(void)
+{
+    return erase_key(DEFAULT_NAMESPACE, EVMBLOB_FIELD);
 }
 
 bool storage_decrement_counter(void)

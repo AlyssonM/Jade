@@ -9,8 +9,10 @@
 #include "utils/malloc_ext.h"
 #include "utils/network.h"
 #include "utils/util.h"
+#include "utils/shake256.h"
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 #include <wally_anti_exfil.h>
@@ -40,6 +42,7 @@ static const uint32_t MAX_PATH_PTR = 10000;
 static const uint32_t BIP44_COIN_BTC = BIP32_INITIAL_HARDENED_CHILD;
 static const uint32_t BIP44_COIN_TEST = BIP32_INITIAL_HARDENED_CHILD + 1;
 static const uint32_t BIP44_COIN_LBTC = BIP32_INITIAL_HARDENED_CHILD + 1776;
+static const uint32_t BIP44_COIN_ETH = BIP32_INITIAL_HARDENED_CHILD + 60;
 static const uint32_t BIP44_PURPOSE = BIP32_INITIAL_HARDENED_CHILD + 44;
 static const uint32_t BIP45_PURPOSE = BIP32_INITIAL_HARDENED_CHILD + 45;
 static const uint32_t BIP48_PURPOSE = BIP32_INITIAL_HARDENED_CHILD + 48;
@@ -401,8 +404,13 @@ static void wallet_get_privkey(const uint32_t* path, const size_t path_len, uint
 
     struct ext_key derived;
     SENSITIVE_PUSH(&derived, sizeof(derived));
+    const keychain_t* kc = keychain_get();
+    const struct ext_key* root = &kc->xpriv;
+    if (path_len >= 2 && path[0] == BIP44_PURPOSE && path[1] == BIP44_COIN_ETH && kc->evm_xpriv.version) {
+        root = &kc->evm_xpriv;
+    }
     JADE_WALLY_VERIFY(bip32_key_from_parent_path(
-        &keychain_get()->xpriv, path, path_len, BIP32_FLAG_KEY_PRIVATE | BIP32_FLAG_SKIP_HASH, &derived));
+        root, path, path_len, BIP32_FLAG_KEY_PRIVATE | BIP32_FLAG_SKIP_HASH, &derived));
 
     memcpy(output, derived.priv_key + 1, output_len);
     SENSITIVE_POP(&derived);
@@ -1295,11 +1303,16 @@ bool wallet_get_hdkey(const uint32_t* path, const size_t path_len, const uint32_
         return false;
     }
 
+    const keychain_t* kc = keychain_get();
+    const struct ext_key* root = &kc->xpriv;
+    if (path_len >= 2 && path && path[0] == BIP44_PURPOSE && path[1] == BIP44_COIN_ETH && kc->evm_xpriv.version) {
+        root = &kc->evm_xpriv;
+    }
     if (path_len == 0) {
         // Just copy root ext key
-        memcpy(output, &keychain_get()->xpriv, sizeof(struct ext_key));
+        memcpy(output, root, sizeof(struct ext_key));
     } else {
-        const int wret = bip32_key_from_parent_path(&keychain_get()->xpriv, path, path_len, flags, output);
+        const int wret = bip32_key_from_parent_path(root, path, path_len, flags, output);
         if (wret != WALLY_OK) {
             JADE_LOGE("Failed to derive key from path (size %u): %d", path_len, wret);
             return false;
@@ -1328,6 +1341,49 @@ bool wallet_get_xpub(const network_t network_id, const uint32_t* path, const siz
     derived.version = version;
     JADE_WALLY_VERIFY(bip32_key_to_base58(&derived, BIP32_FLAG_KEY_PUBLIC, output));
     JADE_LOGD("bip32_key_to_base58: %s", *output);
+    return true;
+}
+
+bool wallet_get_evm_address(const uint32_t* path, const size_t path_len, char* output, const size_t output_len)
+{
+    if (!path || path_len == 0 || !output || output_len < 43) {
+        return false;
+    }
+    if (path_len != 5) {
+        return false;
+    }
+    if (path[0] != BIP44_PURPOSE) {
+        return false;
+    }
+    if (path[1] != BIP44_COIN_ETH) {
+        return false;
+    }
+    struct ext_key derived;
+    if (!wallet_get_hdkey(path, path_len, BIP32_FLAG_KEY_PUBLIC | BIP32_FLAG_SKIP_HASH, &derived)) {
+        return false;
+    }
+    unsigned char uncompressed[EC_PUBLIC_KEY_UNCOMPRESSED_LEN];
+    JADE_WALLY_VERIFY(wally_ec_public_key_decompress(derived.pub_key, sizeof(derived.pub_key), uncompressed, sizeof(uncompressed)));
+    uint8_t hash[SHA256_LEN];
+    keccak_256(uncompressed + 1, EC_PUBLIC_KEY_UNCOMPRESSED_LEN - 1, hash);
+    uint8_t addr_bytes[20];
+    memcpy(addr_bytes, hash + 12, sizeof(addr_bytes));
+    char* hex = NULL;
+    JADE_WALLY_VERIFY(wally_hex_from_bytes(addr_bytes, sizeof(addr_bytes), &hex));
+    uint8_t chk[SHA256_LEN];
+    keccak_256((const uint8_t*)hex, 40, chk);
+    for (int i = 0; i < 40; ++i) {
+        char c = hex[i];
+        if (c >= 'a' && c <= 'f') {
+            uint8_t nibble = (i % 2 == 0) ? ((chk[i / 2] >> 4) & 0x0F) : (chk[i / 2] & 0x0F);
+            if (nibble >= 8) {
+                hex[i] = c - 32;
+            }
+        }
+    }
+    size_t n = snprintf(output, output_len, "0x%s", hex);
+    JADE_ASSERT(n > 0 && n < output_len);
+    JADE_WALLY_VERIFY(wally_free_string(hex));
     return true;
 }
 
@@ -1558,4 +1614,41 @@ void wallet_get_bip85_rsa_entropy(
     JADE_WALLY_VERIFY(bip85_get_rsa_entropy(&keychain_get()->xpriv, key_bits, index, entropy, entropy_len, written));
     JADE_ASSERT(*written <= entropy_len);
 }
+#include <wally_crypto.h>
+bool wallet_sign_evm_hash(const uint8_t* hash32, const size_t hash_len, const uint32_t* path, const size_t path_len,
+    uint8_t* sig_rec, const size_t sig_rec_len, size_t* written, uint8_t* y_parity)
+{
+    if (!hash32 || hash_len != 32 || !path || path_len == 0 || !sig_rec || sig_rec_len < EC_SIGNATURE_RECOVERABLE_LEN
+        || !written || !y_parity) {
+        return false;
+    }
+
+    uint8_t privkey[EC_PRIVATE_KEY_LEN];
+    SENSITIVE_PUSH(privkey, sizeof(privkey));
+    wallet_get_privkey(path, path_len, privkey, sizeof(privkey));
+
+    size_t sig_len = EC_SIGNATURE_RECOVERABLE_LEN;
+    const int wret = wally_ec_sig_from_bytes(
+        privkey, sizeof(privkey), hash32, hash_len, EC_FLAG_ECDSA | EC_FLAG_RECOVERABLE, sig_rec, sig_len);
+    SENSITIVE_POP(privkey);
+
+    if (wret != WALLY_OK) {
+        JADE_LOGE("Failed to sign EVM hash, error %d", wret);
+        return false;
+    }
+
+    // libwally recoverable signatures are encoded as [header || r || s]
+    // For Ethereum typed transactions we need [r || s || v] with v = y-parity (0/1).
+    JADE_ASSERT(sig_len == 65);
+    const uint8_t header = sig_rec[0];
+    memmove(sig_rec, sig_rec + 1, 64); // shift r||s down to the start of the buffer
+    const uint8_t recid = (uint8_t)((header >= 27) ? ((header - 27) & 0x03) : (header & 0x03));
+    const uint8_t parity = recid & 0x01;
+    sig_rec[64] = parity;
+
+    *written = sig_len;
+    *y_parity = parity;
+    return true;
+}
 #endif // AMALGAMATED_BUILD
+// EVM chainIds suportados
